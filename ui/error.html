@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kimi Code - 服务异常</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #1a1a1e;
+      color: #d4d4d8;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .box { text-align: center; max-width: 480px; }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+    .reason {
+      font-size: 13px;
+      color: #a1a1aa;
+      word-break: break-all;
+      margin-bottom: 24px;
+      white-space: pre-wrap;
+    }
+    button {
+      background: #7c3aed;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 24px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { background: #8b5cf6; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>后端服务不可用</h1>
+    <div class="reason" id="reason">正在获取错误信息…</div>
+    <button id="retry">重新启动服务</button>
+  </div>
+  <script>
+    (async () => {
+      try {
+        const msg = await window.__TAURI__.core.invoke("last_error");
+        if (msg) document.getElementById("reason").textContent = msg;
+        else document.getElementById("reason").textContent = "未知错误";
+      } catch (e) {
+        document.getElementById("reason").textContent = String(e);
+      }
+    })();
+    document.getElementById("retry").addEventListener("click", () => {
+      document.getElementById("retry").disabled = true;
+      window.__TAURI__.core.invoke("restart_server");
+    });
+  </script>
+</body>
+</html>

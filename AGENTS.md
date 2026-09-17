@@ -126,14 +126,10 @@ cd src-tauri && cargo tauri dev
 cargo run --manifest-path src-tauri/Cargo.toml
 ```
 
-### 5.3 生产构建与打包
+### 5.3 生产构建
 ```bash
-# 1. 仅编译 Release 二进制文件（产物输出至 src-tauri/target/release/tauri_kimi.exe）
+# 仅编译 Release 二进制文件（产物输出至 src-tauri/target/release/tauri_kimi.exe），不构建分发安装包
 cd src-tauri && cargo build --release
-
-# 2. 完整构建分发安装包（生成 NSIS .exe 安装包与 WiX .msi 安装包）
-cd src-tauri && cargo tauri build
-# 安装包输出路径位于：src-tauri/target/release/bundle/nsis/ 和 src-tauri/target/release/bundle/msi/
 ```
 
 ---

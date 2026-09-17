@@ -1,3 +1,36 @@
-target/
+# Rust / Cargo
+/target/
+**/target/
+**/*.rs.bk
+*.bk
+
+# Tauri
+src-tauri/target/
+
+# Node / Frontend
 node_modules/
+dist/
+build/
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE / Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.sublime-project
+*.sublime-workspace
+

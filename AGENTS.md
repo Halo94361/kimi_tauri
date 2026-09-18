@@ -56,6 +56,10 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 4. **IPC 命令 (Tauri Commands)**：
    - `last_error`：返回 Rust 全局状态中记录的最后一次错误信息字符串。
    - `restart_server`：重置状态、导航回 `index.html` 并重新拉起 `kimi web`。
+5. **进程树级联回收（Windows Job Object）**：
+   - `kimi.exe` 被杀（`TerminateProcess`）时其自身没有机会清理 MCP 孙进程，直接 kill 会导致孤儿进程残留。
+   - 因此 spawn 成功后立即把 `kimi.exe` 挂入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`lib.rs` 中 `win_job` 模块），此后 `kimi.exe` 启动的所有孙进程自动归入同一作业；壳进程以任何方式退出（正常关闭、被强杀、崩溃）导致 job handle 关闭时，系统级联回收整棵进程树。
+   - job handle 存入 `AppState` 随应用生命周期持有；job 创建/绑定失败时退回原有的直接 kill 清理，不影响启动。
 
 ---
 
@@ -66,6 +70,7 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
   - Tauri v2 (`tauri = "2"`, `tauri-build = "2"`)
   - Tauri 插件：`tauri-plugin-opener = "2"`（用于系统默认浏览器打开外链）
   - 正则引擎：`regex = "1"`
+  - Windows API：`windows-sys = "0.59"`（`Win32_System_JobObjects`，仅 Windows 下编译，用于 Job Object 进程树级联回收）
 - **工具链要求**：
   - Rust 编译器：`rustc` / `cargo` (支持 `x86_64-pc-windows-gnu` 或 `x86_64-pc-windows-msvc`)
   - Tauri CLI：`cargo-tauri` (`tauri-cli v2`)

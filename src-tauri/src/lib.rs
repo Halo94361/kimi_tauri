@@ -10,9 +10,81 @@ use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 const KIMI_PORT: u16 = 58627;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Windows Job Object：把 kimi.exe 绑定进带 KILL_ON_JOB_CLOSE 的作业，
+/// 使壳进程以任何方式退出（正常关闭、被强杀、崩溃）时，系统都会级联回收
+/// job 内的 kimi.exe 及其启动的所有 MCP 孙进程，避免孤儿进程残留
+#[cfg(windows)]
+mod win_job {
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    pub struct Job(HANDLE);
+
+    // HANDLE 仅是内核对象的标识值，跨线程传递与共享不涉及数据竞争
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        pub fn new() -> Result<Self, String> {
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() {
+                    return Err(format!(
+                        "CreateJobObjectW 失败: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) == 0
+                {
+                    let err = std::io::Error::last_os_error();
+                    CloseHandle(handle);
+                    return Err(format!("SetInformationJobObject 失败: {err}"));
+                }
+                Ok(Self(handle))
+            }
+        }
+
+        pub fn assign(&self, child: &Child) -> Result<(), String> {
+            unsafe {
+                if AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) == 0 {
+                    return Err(format!(
+                        "AssignProcessToJobObject 失败: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
 #[derive(Default)]
 struct AppState {
     child: Mutex<Option<Child>>,
+    /// 持有 job handle 使整个应用生命周期内 job 存活；进程退出时 handle 关闭，
+    /// 触发 KILL_ON_JOB_CLOSE 级联回收 job 内所有进程
+    #[cfg(windows)]
+    job: Mutex<Option<win_job::Job>>,
     ready: Mutex<bool>,
     quitting: Mutex<bool>,
     last_error: Mutex<String>,
@@ -109,6 +181,23 @@ fn start_server(app: &AppHandle) {
             return;
         }
     };
+
+    // 把 kimi.exe 挂入 Job Object：之后它启动的孙进程（含 MCP server）自动归入
+    // 同一作业；job 创建/绑定失败时退回原有的直接 kill 清理，不影响启动
+    #[cfg(windows)]
+    {
+        let state = app.state::<AppState>();
+        let mut job = state.job.lock().unwrap();
+        if job.is_none() {
+            if let Ok(j) = win_job::Job::new() {
+                *job = Some(j);
+            }
+        }
+        if let Some(j) = job.as_ref() {
+            let _ = j.assign(&child);
+        }
+    }
+
     let stdout = child.stdout.take().expect("stdout piped");
     app.state::<AppState>().child.lock().unwrap().replace(child);
 

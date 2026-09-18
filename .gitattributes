@@ -1,0 +1,2 @@
+# bash 脚本必须以 LF 存取，CRLF 会导致 while read 等语法在 Git Bash 下出错
+*.sh text eol=lf

@@ -137,6 +137,17 @@ cargo run --manifest-path src-tauri/Cargo.toml
 cd src-tauri && cargo build --release
 ```
 
+### 5.4 环境同步检查（新机器/换机后执行）
+
+`scripts/check_env.sh` 逐项输出工具链关键信息（rustc 版本与 host、gcc 发行版、两处 `libgcc_eh.a` 兜底、cargo-tauri、kimi CLI、WebView2 Runtime、`.cargo/config.toml` 失效绝对路径）。
+
+```bash
+# 新机器运行并与 golden 参考比对
+bash scripts/check_env.sh | diff scripts/check_env_golden.txt -
+```
+
+diff 中用户名/安装路径差异可忽略；重点核对版本号一致、两个 `libgcc_eh.a` 都在、无"失效"路径告警。全部通过后执行 `cargo build --release` 冒烟。参考机器的 golden 更新方式：`bash scripts/check_env.sh > scripts/check_env_golden.txt`。
+
 ---
 
 ## 6. 代码规范与开发约定 (Code Conventions)

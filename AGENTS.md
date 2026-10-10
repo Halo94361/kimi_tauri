@@ -16,6 +16,7 @@
 - **子进程原生管控**：Rust 侧直接 spawn 管理 `kimi.exe` 子进程，避免 PowerShell/CMD 中转带来的控制台黑窗与多层进程树问题。
 - **原生文件拖放**：关闭 Tauri 默认的拖放捕获，使 Web 页面能够原生接收 HTML5 文件拖放（如拖拽文件/图片至对话框）。
 - **页面刷新快捷键**：通过 `initialization_script` 注入按键监听，支持 F5 / Ctrl+R 重载页面（WebView2 默认不响应浏览器式刷新快捷键），用于长时间会话后手动释放渲染进程内存。
+- **系统托盘驻留**：应用带系统托盘图标，关闭窗口仅隐藏（kimi web 子进程继续运行，会话不丢），托盘菜单"显示窗口"或左键单击托盘图标唤回窗口，只有托盘菜单"退出"才真正结束应用与子进程。
 
 ---
 
@@ -35,8 +36,9 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
  │     ├─ 本地来源 (127.0.0.1, localhost, tauri.localhost) 允许在窗口内导航
  │     └─ 外部链接拦截并通过 tauri-plugin-opener 调用系统默认浏览器打开
  └─ 6. 异常与生命周期管理：
-       ├─ 窗口关闭时：kill 子进程并 wait 清理，避免后台僵尸进程
-       ├─ 子进程异常退出时：导航至 ui/error.html，提供错误信息与 restart_server 命令
+       ├─ 窗口关闭时：拦截关闭请求并隐藏窗口（托盘驻留，子进程继续运行）
+       ├─ 托盘菜单"退出"时：置 quitting 标志、kill 子进程并 wait 清理，退出事件循环
+       ├─ 子进程异常退出时：导航至 ui/error.html 并唤出窗口，提供错误信息与 restart_server 命令
        └─ 重启服务：由前端调用 Tauri Command 重新进入启动检测流程
 ```
 
@@ -57,6 +59,10 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 4. **IPC 命令 (Tauri Commands)**：
    - `last_error`：返回 Rust 全局状态中记录的最后一次错误信息字符串。
    - `restart_server`：重置状态、导航回 `index.html` 并重新拉起 `kimi web`。
+5. **系统托盘（Tray Icon）**：
+   - `TrayIconBuilder` 创建托盘图标（复用应用窗口图标），菜单含"显示窗口"/"退出"两项；左键单击托盘图标同样唤回窗口。
+   - `CloseRequested` 拦截：非退出路径一律 `prevent_close()` + 隐藏窗口，kimi web 子进程保持运行；仅托盘"退出"走 `quit_app`（置 `quitting` 标志 → `kill_child` → `app.exit(0)`）。关闭拦截前检查 `quitting` 标志，保证退出流程中窗口能正常销毁。
+   - `show_error` 在窗口隐藏时会顺带唤出窗口，确保托盘驻留期间服务异常可被用户感知。
 5. **进程树级联回收（Windows Job Object）**：
    - `kimi.exe` 被杀（`TerminateProcess`）时其自身没有机会清理 MCP 孙进程，直接 kill 会导致孤儿进程残留。
    - 因此 spawn 成功后立即把 `kimi.exe` 挂入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`lib.rs` 中 `win_job` 模块），此后 `kimi.exe` 启动的所有孙进程自动归入同一作业；壳进程以任何方式退出（正常关闭、被强杀、崩溃）导致 job handle 关闭时，系统级联回收整棵进程树。
@@ -68,7 +74,7 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 
 - **语言与框架**：
   - Rust (Edition 2021)
-  - Tauri v2 (`tauri = "2"`, `tauri-build = "2"`)
+  - Tauri v2 (`tauri = "2"` 含 `tray-icon` feature，用于系统托盘, `tauri-build = "2"`)
   - Tauri 插件：`tauri-plugin-opener = "2"`（用于系统默认浏览器打开外链）
   - 正则引擎：`regex = "1"`
   - Windows API：`windows-sys = "0.59"`（`Win32_System_JobObjects`，仅 Windows 下编译，用于 Job Object 进程树级联回收）

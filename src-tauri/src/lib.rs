@@ -4,6 +4,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use regex::Regex;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
@@ -150,11 +152,30 @@ fn app_page(app: &AppHandle, page: &str) -> Option<String> {
     }
 }
 
+/// 显示并聚焦主窗口（从托盘恢复时调用）
+fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 fn show_error(app: &AppHandle, msg: &str) {
     *app.state::<AppState>().last_error.lock().unwrap() = msg.to_string();
     if let Some(url) = app_page(app, "error.html") {
         navigate_main(app, &url);
     }
+    // 托盘模式下窗口可能处于隐藏状态，出错时主动唤出让用户感知
+    show_main_window(app);
+}
+
+/// 真正退出应用：标记 quitting、杀掉 kimi web 子进程并退出事件循环
+fn quit_app(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    *state.quitting.lock().unwrap() = true;
+    kill_child(&state);
+    app.exit(0);
 }
 
 fn kill_child(state: &AppState) {
@@ -290,6 +311,36 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![last_error, restart_server])
         .setup(|app| {
+            // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
+            let tray_menu = MenuBuilder::new(app)
+                .item(&MenuItemBuilder::with_id("show", "显示窗口").build(app)?)
+                .separator()
+                .item(&MenuItemBuilder::with_id("quit", "退出").build(app)?)
+                .build()?;
+            let mut tray = TrayIconBuilder::with_id("main-tray")
+                .tooltip("Kimi Code")
+                .menu(&tray_menu)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => quit_app(app),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // 左键单击托盘图标：显示主窗口
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
             // 高分屏下 inner_size 是逻辑尺寸，会被 DPI 放大到超出屏幕；
             // 创建窗口前就先按主显示器工作区的 85% 钳制（上限 1600x1200），
             // 避免先按大尺寸显示再缩小的闪烁
@@ -354,10 +405,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let state = window.state::<AppState>();
-                *state.quitting.lock().unwrap() = true;
-                kill_child(&state);
+            // 托盘模式下关窗不退出：拦截关闭请求并隐藏窗口，
+            // kimi web 子进程继续运行；真正退出走托盘菜单的"退出"
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if *window.state::<AppState>().quitting.lock().unwrap() {
+                    return;
+                }
+                api.prevent_close();
+                let _ = window.hide();
             }
         })
         .run(tauri::generate_context!())

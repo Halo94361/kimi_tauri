@@ -314,6 +314,16 @@ pub fn run() {
                 .center()
                 // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
                 .disable_drag_drop_handler()
+                // WebView2 默认不响应浏览器式刷新快捷键，注入脚本补齐：
+                // F5 / Ctrl+R 触发页面重载，用于长时间会话后释放渲染进程内存
+                .initialization_script(
+                    r#"window.addEventListener("keydown", (e) => {
+                        if (e.key === "F5" || (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R"))) {
+                            e.preventDefault();
+                            location.reload();
+                        }
+                    });"#,
+                )
                 .on_navigation(|url| {
                     if is_local(url) {
                         true

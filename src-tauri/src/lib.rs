@@ -374,8 +374,8 @@ pub fn run() {
                 // 注入脚本补齐两块 WebView2 缺失行为：
                 // 1. F5 / Ctrl+R 触发页面重载（WebView2 默认不响应浏览器式刷新快捷键），
                 //    用于长时间会话后释放渲染进程内存
-                // 2. 暴露 kimi web 约定的桌面桥 window.kimiDesktop.showWindow：
-                //    通知 toast 被点击时页面会调用它唤起主窗口（托盘驻留期间窗口可能只是被隐藏）
+                // 2. 暴露 kimi web 约定的桌面桥 window.kimiDesktop：showWindow 供通知
+                //    toast 点击唤回主窗口；其余字段是宿主契约所需的最小空实现
                 .initialization_script(
                     r#"window.addEventListener("keydown", (e) => {
                         if (e.key === "F5" || (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R"))) {
@@ -386,10 +386,20 @@ pub fn run() {
                     (function () {
                         if (!window.__TAURI__) return;
                         window.kimiDesktop = {
-                            showWindow: () => { window.__TAURI__.core.invoke("show_window").catch(() => {}) }
+                            showWindow: () => { window.__TAURI__.core.invoke("show_window").catch(() => {}) },
+                            // 桌面宿主契约：kimi web 前端会探测若干宿主方法，其中更新相关方法
+                            // （onUpdateStatus / getUpdateStatus）不做存在性检查、直接调用，
+                            // 缺失会让设置面板在初始化时抛 TypeError（前端错误边界显示"出错了"）；
+                            // 本壳不提供自动更新，状态恒为 idle，前端据此隐藏更新入口
+                            log: (level, message, args) => { console[level === "error" ? "error" : "info"](message, ...(args || [])) },
+                            setTheme: () => {},
+                            onUpdateStatus: () => () => {},
+                            getUpdateStatus: () => Promise.resolve({ state: "idle" })
                         };
                     })();"#,
                 )
+                // 注入用量统计悬浮窗：轮询 session_stats，实时显示 TPS / 会话 token / 缓存命中率
+                .initialization_script(STATS_OVERLAY_JS)
                 // 放行 Web 通知权限：WebView2 对未应答的权限请求默认拒绝，
                 // 页面的 Web Notification API 会因此被静默吞掉
                 .on_permission_request(|_, kind| match kind {

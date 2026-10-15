@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capability set for the main window",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default", "allow-last-error", "allow-restart-server"]
+  "permissions": ["core:default", "opener:default", "allow-last-error", "allow-restart-server", "allow-switch-tab", "allow-report-theme"]
 }

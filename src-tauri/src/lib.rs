@@ -8,11 +8,69 @@ use std::time::Duration;
 use regex::Regex;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse};
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse, WebviewBuilder};
+use tauri::window::WindowBuilder;
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, WebviewUrl};
 
 const KIMI_PORT: u16 = 58627;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+/// 远端托管版 kimi web：登录态由 WebView2 用户数据目录持久化
+const REMOTE_URL: &str = "https://code-rc.kimi.com/";
+/// 顶部选项卡栏（tabbar WebView）的逻辑高度
+const TABBAR_HEIGHT: f64 = 36.0;
+/// 活动页面主题采样周期：eval 一段只读脚本的开销可忽略，200ms 足够跟手
+const THEME_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// 主题采样脚本（由 Rust 定时 eval 进当前活动的内容 WebView）：
+/// 依次检查 body / html / body 首子元素的计算背景色，取第一个非透明色
+/// 按 Rec.601 亮度判断深浅；全部透明时回退到系统主题。
+/// 结果经 report_theme 命令上报，Rust 侧去重后转发给 tabbar
+const THEME_SAMPLE_JS: &str = r#"(function () {
+  try {
+    var T = window.__TAURI__; if (!T) return;
+    var els = [document.body, document.documentElement];
+    if (document.body && document.body.firstElementChild) els.push(document.body.firstElementChild);
+    var dark = null;
+    for (var i = 0; i < els.length; i++) {
+      if (!els[i]) continue;
+      var c = getComputedStyle(els[i]).backgroundColor;
+      var m = c && c.match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?\s*\)/);
+      if (!m) continue;
+      var a = m[4] === undefined ? 1 : parseFloat(m[4]);
+      if (a < 0.5) continue;
+      dark = (0.299 * m[1] + 0.587 * m[2] + 0.114 * m[3]) < 128;
+      break;
+    }
+    if (dark === null) dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    T.core.invoke("report_theme", { dark: dark });
+  } catch (e) {}
+})();"#;
+
+/// 注入本地与远端内容 WebView 的共享脚本，补齐两块 WebView2 缺失行为：
+/// 1. F5 / Ctrl+R 触发页面重载（WebView2 默认不响应浏览器式刷新快捷键），
+///    用于长时间会话后释放渲染进程内存
+/// 2. 暴露 kimi web 约定的桌面桥 window.kimiDesktop：showWindow 供通知
+///    toast 点击唤回主窗口；其余字段是宿主契约所需的最小空实现
+const REFRESH_BRIDGE_JS: &str = r#"window.addEventListener("keydown", (e) => {
+    if (e.key === "F5" || (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R"))) {
+        e.preventDefault();
+        location.reload();
+    }
+});
+(function () {
+    if (!window.__TAURI__) return;
+    window.kimiDesktop = {
+        showWindow: () => { window.__TAURI__.core.invoke("show_window").catch(() => {}) },
+        // 桌面宿主契约：kimi web 前端会探测若干宿主方法，其中更新相关方法
+        // （onUpdateStatus / getUpdateStatus）不做存在性检查、直接调用，
+        // 缺失会让设置面板在初始化时抛 TypeError（前端错误边界显示"出错了"）；
+        // 本壳不提供自动更新，状态恒为 idle，前端据此隐藏更新入口
+        log: (level, message, args) => { console[level === "error" ? "error" : "info"](message, ...(args || [])) },
+        setTheme: () => {},
+        onUpdateStatus: () => () => {},
+        getUpdateStatus: () => Promise.resolve({ state: "idle" })
+    };
+})();"#;
 
 /// 注入 kimi web 页面的用量统计悬浮窗：
 /// 每 2s 轮询 session_stats 命令，渲染可拖动、跟随页面深浅主题的
@@ -187,7 +245,7 @@ const STATS_OVERLAY_JS: &str = r##"
       row("TPS 均值（近5次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
       row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
       row("输入合计", fmt(d.input_total)) +
-      row("· 缓存读 / 写", fmt(d.cache_read) + " / " + fmt(d.cache_creation)) +
+      row("缓存读", fmt(d.cache_read)) +
       row("输出合计", fmt(d.output_total)) +
       row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
       row("会话", String(d.session_id || "").slice(0, 24));
@@ -293,6 +351,10 @@ struct AppState {
     last_error: Mutex<String>,
     app_origin: Mutex<String>,
     stats: Mutex<StatsState>,
+    /// 当前活动选项卡："local" | "remote"
+    active_tab: Mutex<String>,
+    /// 最近一次采样得到的页面主题（true=深色），用于去重后只在变化时通知 tabbar
+    last_theme: Mutex<Option<bool>>,
 }
 
 /// 会话用量统计的增量解析状态：按会话维度聚合该会话所有 agent 的
@@ -332,6 +394,15 @@ fn is_local(url: &Url) -> bool {
     }
 }
 
+/// 远端内容 WebView 允许在窗口内导航的域名：
+/// code-rc.kimi.com 本体与 kimi.com 登录链路子域；其余外链一律系统浏览器打开
+fn is_remote_allowed(url: &Url) -> bool {
+    match url.host_str() {
+        Some(h) => url.scheme() == "https" && (h == "kimi.com" || h.ends_with(".kimi.com")),
+        None => false,
+    }
+}
+
 fn open_external(url: &Url) {
     let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
 }
@@ -365,8 +436,9 @@ fn spawn_kimi() -> Result<Child, String> {
     ))
 }
 
-fn navigate_main(app: &AppHandle, url: &str) {
-    if let Some(w) = app.get_webview_window("main") {
+/// 导航本地内容 WebView（本地 kimi web / 壳内建页面都加载在这个 WebView 里）
+fn navigate_local(app: &AppHandle, url: &str) {
+    if let Some(w) = app.get_webview("local") {
         if let Ok(u) = url.parse() {
             let _ = w.navigate(u);
         }
@@ -384,20 +456,60 @@ fn app_page(app: &AppHandle, page: &str) -> Option<String> {
 
 /// 显示并聚焦主窗口（从托盘恢复时调用）
 fn show_main_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
+    if let Some(w) = app.get_window("main") {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
     }
 }
 
+/// 切换活动选项卡：只改内容 WebView 可见性，两个会话同时存活互不打扰
+fn switch_to_tab(app: &AppHandle, tab: &str) {
+    *app.state::<AppState>().active_tab.lock().unwrap() = tab.to_string();
+    for (label, active) in [("local", tab == "local"), ("remote", tab == "remote")] {
+        if let Some(wv) = app.get_webview(label) {
+            if active {
+                let _ = wv.show();
+            } else {
+                let _ = wv.hide();
+            }
+        }
+    }
+    // 同步选项卡栏高亮（覆盖 show_error 等 Rust 侧强制切卡的场景）
+    let _ = app.emit_to("tabbar", "tab-changed", tab);
+}
+
 fn show_error(app: &AppHandle, msg: &str) {
     *app.state::<AppState>().last_error.lock().unwrap() = msg.to_string();
     if let Some(url) = app_page(app, "error.html") {
-        navigate_main(app, &url);
+        navigate_local(app, &url);
     }
+    // 错误发生在本地后端：强制切回"本地"选项卡让错误页可见
+    switch_to_tab(app, "local");
     // 托盘模式下窗口可能处于隐藏状态，出错时主动唤出让用户感知
     show_main_window(app);
+}
+
+/// 按窗口逻辑尺寸重排子 WebView：tabbar 置顶 TABBAR_HEIGHT，
+/// 两个内容 WebView 铺满下方（bounds 是物理像素，需除以缩放因子换算）
+fn layout_webviews(window: &tauri::Window) {
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let w = size.width as f64 / scale;
+    let h = size.height as f64 / scale;
+    let content_h = (h - TABBAR_HEIGHT).max(0.0);
+    if let Some(tabbar) = window.get_webview("tabbar") {
+        let _ = tabbar.set_position(LogicalPosition::new(0.0, 0.0));
+        let _ = tabbar.set_size(LogicalSize::new(w, TABBAR_HEIGHT));
+    }
+    for label in ["local", "remote"] {
+        if let Some(wv) = window.get_webview(label) {
+            let _ = wv.set_position(LogicalPosition::new(0.0, TABBAR_HEIGHT));
+            let _ = wv.set_size(LogicalSize::new(w, content_h));
+        }
+    }
 }
 
 /// 真正退出应用：标记 quitting、杀掉 kimi web 子进程并退出事件循环
@@ -488,7 +600,7 @@ fn start_server(app: &AppHandle) {
             if !navigated {
                 if let (Some(p), Some(t)) = (&port, &token) {
                     *app_reader.state::<AppState>().ready.lock().unwrap() = true;
-                    navigate_main(&app_reader, &format!("http://127.0.0.1:{p}/#token={t}"));
+                    navigate_local(&app_reader, &format!("http://127.0.0.1:{p}/#token={t}"));
                     navigated = true;
                 }
             }
@@ -529,7 +641,7 @@ fn last_error(state: tauri::State<AppState>) -> String {
 #[tauri::command]
 fn restart_server(app: AppHandle) {
     if let Some(url) = app_page(&app, "index.html") {
-        navigate_main(&app, &url);
+        navigate_local(&app, &url);
     }
     start_server(&app);
 }
@@ -538,6 +650,31 @@ fn restart_server(app: AppHandle) {
 #[tauri::command]
 fn show_window(app: AppHandle) {
     show_main_window(&app);
+}
+
+/// 选项卡栏页调用：切换本地 / 远端内容 WebView 的可见性
+#[tauri::command]
+fn switch_tab(tab: String, app: AppHandle) -> Result<(), String> {
+    match tab.as_str() {
+        "local" | "remote" => {
+            switch_to_tab(&app, &tab);
+            Ok(())
+        }
+        _ => Err(format!("未知选项卡: {tab}")),
+    }
+}
+
+/// 主题采样脚本（THEME_SAMPLE_JS）的上报入口：
+/// 去重后只在深浅色变化时通知 tabbar 切换配色
+#[tauri::command]
+fn report_theme(dark: bool, app: AppHandle) {
+    let state = app.state::<AppState>();
+    let mut last = state.last_theme.lock().unwrap();
+    if *last == Some(dark) {
+        return;
+    }
+    *last = Some(dark);
+    let _ = app.emit_to("tabbar", "theme-changed", if dark { "dark" } else { "light" });
 }
 
 /// Kimi Code 数据根目录：优先 KIMI_CODE_HOME，默认 ~/.kimi-code
@@ -719,7 +856,9 @@ pub fn run() {
             last_error,
             restart_server,
             show_window,
-            session_stats
+            session_stats,
+            switch_tab,
+            report_theme
         ])
         .setup(|app| {
             // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
@@ -769,87 +908,134 @@ pub fn run() {
                 _ => (1280.0, 800.0),
             };
 
-            let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            // 裸窗口 + 3 个子 WebView：tabbar（顶部选项卡栏）、local（本地 kimi web）、
+            // remote（远端托管服务）；切换选项卡只改可见性，两个会话同时存活
+            let mut win_builder = WindowBuilder::new(app, "main")
                 .title("Kimi Code")
                 .inner_size(win_w, win_h)
                 .min_inner_size(720.0, 480.0)
                 .center()
-                // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
-                .disable_drag_drop_handler()
-                // 注入脚本补齐两块 WebView2 缺失行为：
-                // 1. F5 / Ctrl+R 触发页面重载（WebView2 默认不响应浏览器式刷新快捷键），
-                //    用于长时间会话后释放渲染进程内存
-                // 2. 暴露 kimi web 约定的桌面桥 window.kimiDesktop：showWindow 供通知
-                //    toast 点击唤回主窗口；其余字段是宿主契约所需的最小空实现
-                .initialization_script(
-                    r#"window.addEventListener("keydown", (e) => {
-                        if (e.key === "F5" || (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R"))) {
-                            e.preventDefault();
-                            location.reload();
+                // 先隐藏，待三个子 WebView 就位（远端初始隐藏）后再显示，避免闪动
+                .visible(false);
+            if let Some(icon) = app.default_window_icon() {
+                win_builder = win_builder.icon(icon.clone())?;
+            }
+            let win = win_builder.build()?;
+
+            let content_pos = LogicalPosition::new(0.0, TABBAR_HEIGHT);
+            let content_size = LogicalSize::new(win_w, (win_h - TABBAR_HEIGHT).max(1.0));
+
+            let tabbar = win.add_child(
+                WebviewBuilder::new("tabbar", WebviewUrl::App("tabs.html".into())),
+                LogicalPosition::new(0.0, 0.0),
+                LogicalSize::new(win_w, TABBAR_HEIGHT),
+            )?;
+
+            // 本地内容 WebView：承载壳内建页（index/error）与本地 kimi web
+            win.add_child(
+                WebviewBuilder::new("local", WebviewUrl::App("index.html".into()))
+                    // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
+                    .disable_drag_drop_handler()
+                    // F5/Ctrl+R 刷新快捷键 + window.kimiDesktop 桌面桥
+                    .initialization_script(REFRESH_BRIDGE_JS)
+                    // 注入用量统计悬浮窗：轮询 session_stats，实时显示 TPS / 会话 token / 缓存命中率
+                    .initialization_script(STATS_OVERLAY_JS)
+                    // 放行 Web 通知权限：WebView2 对未应答的权限请求默认拒绝，
+                    // 页面的 Web Notification API 会因此被静默吞掉
+                    .on_permission_request(|_, kind| match kind {
+                        PermissionKind::Notifications => PermissionResponse::Allow,
+                        _ => PermissionResponse::Default,
+                    })
+                    .on_navigation(|url| {
+                        if is_local(url) {
+                            true
+                        } else {
+                            open_external(url);
+                            false
                         }
-                    });
-                    (function () {
-                        if (!window.__TAURI__) return;
-                        window.kimiDesktop = {
-                            showWindow: () => { window.__TAURI__.core.invoke("show_window").catch(() => {}) },
-                            // 桌面宿主契约：kimi web 前端会探测若干宿主方法，其中更新相关方法
-                            // （onUpdateStatus / getUpdateStatus）不做存在性检查、直接调用，
-                            // 缺失会让设置面板在初始化时抛 TypeError（前端错误边界显示"出错了"）；
-                            // 本壳不提供自动更新，状态恒为 idle，前端据此隐藏更新入口
-                            log: (level, message, args) => { console[level === "error" ? "error" : "info"](message, ...(args || [])) },
-                            setTheme: () => {},
-                            onUpdateStatus: () => () => {},
-                            getUpdateStatus: () => Promise.resolve({ state: "idle" })
-                        };
-                    })();"#,
-                )
-                // 注入用量统计悬浮窗：轮询 session_stats，实时显示 TPS / 会话 token / 缓存命中率
-                .initialization_script(STATS_OVERLAY_JS)
-                // 放行 Web 通知权限：WebView2 对未应答的权限请求默认拒绝，
-                // 页面的 Web Notification API 会因此被静默吞掉
-                .on_permission_request(|_, kind| match kind {
-                    PermissionKind::Notifications => PermissionResponse::Allow,
-                    _ => PermissionResponse::Default,
-                })
-                .on_navigation(|url| {
-                    if is_local(url) {
-                        true
-                    } else {
-                        open_external(url);
-                        false
-                    }
-                })
-                .on_new_window(|url, _features| {
-                    if is_local(&url) {
-                        NewWindowResponse::Allow
-                    } else {
-                        open_external(&url);
-                        NewWindowResponse::Deny
-                    }
-                })
-                .build()?;
+                    })
+                    .on_new_window(|url, _features| {
+                        if is_local(&url) {
+                            NewWindowResponse::Allow
+                        } else {
+                            open_external(&url);
+                            NewWindowResponse::Deny
+                        }
+                    }),
+                content_pos,
+                content_size,
+            )?;
+
+            // 远端内容 WebView：托管服务自带登录与错误提示，壳只做域名白名单管控；
+            // 不注入统计浮窗（统计依赖本机 wire.jsonl，远端无数据）
+            let remote = win.add_child(
+                WebviewBuilder::new("remote", WebviewUrl::External(Url::parse(REMOTE_URL).unwrap()))
+                    .disable_drag_drop_handler()
+                    .initialization_script(REFRESH_BRIDGE_JS)
+                    .on_permission_request(|_, kind| match kind {
+                        PermissionKind::Notifications => PermissionResponse::Allow,
+                        _ => PermissionResponse::Default,
+                    })
+                    .on_navigation(|url| {
+                        if is_remote_allowed(url) {
+                            true
+                        } else {
+                            open_external(url);
+                            false
+                        }
+                    })
+                    .on_new_window(|url, _features| {
+                        if is_remote_allowed(&url) {
+                            NewWindowResponse::Allow
+                        } else {
+                            open_external(&url);
+                            NewWindowResponse::Deny
+                        }
+                    }),
+                content_pos,
+                content_size,
+            )?;
+            // 初始落在"本地"选项卡，远端 WebView 后台预加载但不可见
+            let _ = remote.hide();
 
             // 记录应用页面源（如 http://tauri.localhost/），供错误页/加载页导航使用
-            if let Ok(mut u) = win.url() {
+            if let Ok(mut u) = tabbar.url() {
                 u.set_path("/");
                 u.set_query(None);
                 u.set_fragment(None);
                 *app.state::<AppState>().app_origin.lock().unwrap() = u.to_string();
             }
 
+            let _ = win.show();
+
+            // 主题采样轮询：定时在当前活动的内容 WebView 里 eval 只读采样脚本，
+            // 由脚本读取页面计算背景色并经 report_theme 上报深浅色
+            let app_theme = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(THEME_POLL_INTERVAL);
+                let tab = app_theme.state::<AppState>().active_tab.lock().unwrap().clone();
+                let label = if tab == "remote" { "remote" } else { "local" };
+                if let Some(wv) = app_theme.get_webview(label) {
+                    let _ = wv.eval(THEME_SAMPLE_JS);
+                }
+            });
+
             start_server(app.handle());
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // 托盘模式下关窗不退出：拦截关闭请求并隐藏窗口，
             // kimi web 子进程继续运行；真正退出走托盘菜单的"退出"
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
                 if *window.state::<AppState>().quitting.lock().unwrap() {
                     return;
                 }
                 api.prevent_close();
                 let _ = window.hide();
             }
+            // 子 WebView 不随窗口自动缩放，需手动按逻辑尺寸重排 bounds
+            tauri::WindowEvent::Resized(_) => layout_webviews(window),
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

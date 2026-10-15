@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-report-theme"
+description = "Enables the report_theme command without any pre-configured scope."
+commands.allow = ["report_theme"]
+
+[[permission]]
+identifier = "deny-report-theme"
+description = "Denies the report_theme command without any pre-configured scope."
+commands.deny = ["report_theme"]

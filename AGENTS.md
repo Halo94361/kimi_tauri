@@ -10,9 +10,11 @@
 
 ### 核心特性与设计原则
 - **零前端打包 (Zero-bundle Webview)**：不将 Kimi Web 前端打包进 exe 产物中，主界面直接通过 WebView2 加载由 `kimi web` 进程在本地 (`127.0.0.1:<port>`) 提供的同源页面。当用户通过 `kimi upgrade` 升级 CLI 后，桌面应用会自动呈现最新版 Web UI，无需重新编译桌面壳。
-- **本地极简内置页**：壳工程自身仅嵌入两个本地静态页面（位于 `ui/`）：
+- **本地极简内置页**：壳工程自身仅嵌入三个本地静态页面（位于 `ui/`）：
+  - `ui/tabs.html`：顶部选项卡栏（本地 / 远端），点击经 `switch_tab` 命令切换内容 WebView 可见性；深浅色主题由 Rust 侧 200ms 轮询 eval 采样脚本（`THEME_SAMPLE_JS`）读取活动页面计算背景色，经 `report_theme` 去重后 emit `theme-changed` 精确跟随，`prefers-color-scheme` 作首报前兜底。
   - `ui/index.html`：启动加载动画页（Loading Spinner），等待后端服务就绪。
   - `ui/error.html`：服务断开或启动失败时的错误提示页，支持读取错误详情并一键重启服务。
+- **本地 / 远端双连接共存（单窗口多 WebView 选项卡）**：主窗口为裸窗口 + 3 个子 WebView（`tabbar` / `local` / `remote`）。`local` 承载本地 kimi web，`remote` 直接加载托管服务 `https://code-rc.kimi.com/`（WebView 内登录，Cookie 由 WebView2 用户数据目录持久化）；切换选项卡只改 WebView 可见性，两个会话真正同时存活。
 - **子进程原生管控**：Rust 侧直接 spawn 管理 `kimi.exe` 子进程，避免 PowerShell/CMD 中转带来的控制台黑窗与多层进程树问题。
 - **原生文件拖放**：关闭 Tauri 默认的拖放捕获，使 Web 页面能够原生接收 HTML5 文件拖放（如拖拽文件/图片至对话框）。
 - **页面刷新快捷键**：通过 `initialization_script` 注入按键监听，支持 F5 / Ctrl+R 重载页面（WebView2 默认不响应浏览器式刷新快捷键），用于长时间会话后手动释放渲染进程内存。

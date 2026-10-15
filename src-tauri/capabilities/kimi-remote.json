@@ -4,6 +4,6 @@
   "description": "Allow the local kimi web page to invoke shell commands",
   "windows": ["main"],
   "local": false,
-  "remote": { "urls": ["http://127.0.0.1:*"] },
-  "permissions": ["allow-show-window", "allow-session-stats"]
+  "remote": { "urls": ["http://127.0.0.1:*", "https://code-rc.kimi.com", "https://code-rc.kimi.com/*"] },
+  "permissions": ["allow-show-window", "allow-session-stats", "allow-report-theme"]
 }

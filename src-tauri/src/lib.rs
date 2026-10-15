@@ -1,4 +1,6 @@
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -11,6 +13,205 @@ use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
 const KIMI_PORT: u16 = 58627;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 注入 kimi web 页面的用量统计悬浮窗：
+/// 每 2s 轮询 session_stats 命令，渲染可拖动、跟随页面深浅主题的
+/// 半透明毛玻璃浮窗（位置与折叠状态存 localStorage）；仅在 127.0.0.1/localhost
+/// 的 kimi web 页面启用，壳内建 index/error 页不显示
+const STATS_OVERLAY_JS: &str = r##"
+(function () {
+  if (!window.__TAURI__) return;
+  var invoke = window.__TAURI__.core.invoke;
+  var POS_KEY = "kimiStatsPos", FOLD_KEY = "kimiStatsFold", PIN_KEY = "kimiStatsPin";
+  var root = null, bar = null, dot = null, detail = null, detailBody = null, pinBtn = null;
+  var folded = localStorage.getItem(FOLD_KEY) === "1";
+  var pinned = localStorage.getItem(PIN_KEY) === "1";
+  var lastData = null;
+
+  function onKimiWeb() {
+    return location.hostname === "127.0.0.1" || location.hostname === "localhost";
+  }
+  function isDark() {
+    var de = document.documentElement;
+    var s = ((de.getAttribute("data-color-scheme") || "") + " " +
+      (de.getAttribute("data-theme") || "") + " " + de.className).toLowerCase();
+    if (s.indexOf("dark") >= 0) return true;
+    if (s.indexOf("light") >= 0) return false;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  }
+  function applyTheme() {
+    if (!root) return;
+    var t = isDark() ? {
+      bg: "rgba(28,28,30,0.72)", fg: "rgba(255,255,255,0.92)",
+      border: "rgba(255,255,255,0.18)", shadow: "0 2px 12px rgba(0,0,0,0.4)"
+    } : {
+      bg: "rgba(255,255,255,0.72)", fg: "rgba(0,0,0,0.85)",
+      border: "rgba(0,0,0,0.12)", shadow: "0 2px 12px rgba(0,0,0,0.12)"
+    };
+    [bar, detail, dot].forEach(function (el) {
+      // 用 backgroundColor/borderColor 而非 shorthand，避免重置 detail 的
+      // background-clip 与 6px 透明上边框（鼠标命中桥）
+      el.style.backgroundColor = t.bg; el.style.color = t.fg;
+      el.style.borderColor = t.border; el.style.boxShadow = t.shadow;
+    });
+    detail.style.borderTopColor = "transparent";
+  }
+  function applyFold() {
+    bar.style.display = folded ? "none" : "flex";
+    dot.style.display = folded ? "flex" : "none";
+    // 锁定状态下详情面板常驻；折叠成小圆点时强制收起
+    detail.style.display = (!folded && pinned && lastData && lastData.found) ? "block" : "none";
+  }
+  function applyPin() {
+    pinBtn.style.opacity = pinned ? "1" : "0.35";
+    applyFold();
+  }
+  function enableDrag() {
+    var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false;
+    function down(e) {
+      dragging = true; moved = false;
+      sx = e.clientX; sy = e.clientY;
+      var r = root.getBoundingClientRect();
+      ox = r.left; oy = r.top;
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    }
+    function move(e) {
+      if (!dragging) return;
+      var dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      if (!moved) return;
+      var left = Math.min(Math.max(0, ox + dx), window.innerWidth - root.offsetWidth);
+      var top = Math.min(Math.max(0, oy + dy), window.innerHeight - root.offsetHeight);
+      root.style.left = left + "px"; root.style.top = top + "px";
+      root.style.right = "auto";
+      localStorage.setItem(POS_KEY, JSON.stringify({ left: left, top: top }));
+    }
+    function up() {
+      dragging = false;
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+    }
+    bar.addEventListener("pointerdown", down);
+    dot.addEventListener("pointerdown", down);
+  }
+  function ensureRoot() {
+    if (root || !document.body) return;
+    root = document.createElement("div");
+    root.id = "kimi-stats-overlay";
+    var s = root.style;
+    s.position = "fixed"; s.zIndex = "2147483000";
+    s.font = "12px/1.5 system-ui, sans-serif";
+    s.userSelect = "none"; s.webkitUserSelect = "none";
+    s.display = "none";
+    var pos = null;
+    try { pos = JSON.parse(localStorage.getItem(POS_KEY) || "null"); } catch (e) {}
+    if (pos && typeof pos.left === "number" && typeof pos.top === "number") {
+      s.left = pos.left + "px"; s.top = pos.top + "px";
+    } else {
+      s.right = "12px"; s.top = "12px";
+    }
+    bar = document.createElement("div");
+    bar.style.cssText = "display:flex;align-items:center;justify-content:center;min-width:230px;padding:5px 12px;" +
+      "border:1px solid transparent;border-radius:10px;" +
+      "backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);cursor:move;white-space:nowrap";
+    dot = document.createElement("div");
+    dot.style.cssText = "display:none;align-items:center;justify-content:center;width:36px;height:36px;" +
+      "border:1px solid transparent;border-radius:50%;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);cursor:move;font-size:16px";
+    dot.textContent = "⚡";
+    detail = document.createElement("div");
+    // top:100% + 透明上边框：保留 6px 视觉间距，同时让命中区域与横条连成一片，
+    // 鼠标才能从横条移到面板上（否则会触发 mouseleave 自动收起）；
+    // background-clip:padding-box 让毛玻璃背景不渗进透明边框区
+    detail.style.cssText = "display:none;position:absolute;top:100%;left:0;right:0;box-sizing:border-box;" +
+      "border:1px solid transparent;border-top:6px solid transparent;background-clip:padding-box;" +
+      "padding:8px 12px;border-radius:10px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);cursor:default";
+    // 头部固定（含锁定按钮），内容区由 render 重写，避免每轮重建按钮
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:2px";
+    var title = document.createElement("span");
+    title.style.opacity = "0.5";
+    title.textContent = "会话用量";
+    pinBtn = document.createElement("span");
+    pinBtn.textContent = "📌";
+    pinBtn.title = "锁定 / 自动收起";
+    pinBtn.style.cssText = "cursor:pointer;opacity:0.35";
+    pinBtn.addEventListener("click", function () {
+      pinned = !pinned;
+      localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
+      applyPin();
+    });
+    head.appendChild(title); head.appendChild(pinBtn);
+    detailBody = document.createElement("div");
+    detail.appendChild(head); detail.appendChild(detailBody);
+    root.appendChild(bar); root.appendChild(dot); root.appendChild(detail);
+    document.body.appendChild(root);
+    root.addEventListener("mouseenter", function () {
+      if (!folded && lastData && lastData.found) detail.style.display = "block";
+    });
+    root.addEventListener("mouseleave", function () { if (!pinned) detail.style.display = "none"; });
+    root.addEventListener("dblclick", function (e) {
+      // 详情面板内的双击（如锁定按钮）不触发折叠切换
+      if (detail.contains(e.target)) return;
+      folded = !folded;
+      localStorage.setItem(FOLD_KEY, folded ? "1" : "0");
+      applyFold();
+    });
+    enableDrag();
+    applyTheme(); applyPin();
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", applyTheme); else mq.addListener(applyTheme);
+    new MutationObserver(applyTheme).observe(document.documentElement,
+      { attributes: true, attributeFilter: ["class", "data-color-scheme", "data-theme"] });
+  }
+
+  function fmt(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+    if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+    return String(n);
+  }
+  function row(k, v) {
+    return '<div style="display:flex;justify-content:space-between;gap:16px">' +
+      '<span style="opacity:0.65">' + k + "</span><span>" + v + "</span></div>";
+  }
+  function render(d) {
+    lastData = d;
+    if (!d || !d.found) { root.style.display = "none"; return; }
+    root.style.display = "block";
+    // 空闲 30s 后 TPS 显示 --，避免残留旧值误导
+    var idle = !d.last_record_time || (Date.now() - d.last_record_time > 30000);
+    var tps = (!d.has_tps || idle) ? "--" : d.tps_avg.toFixed(1);
+    bar.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
+      " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
+    detailBody.innerHTML =
+      row("TPS 均值（近5次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
+      row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
+      row("输入合计", fmt(d.input_total)) +
+      row("· 缓存读 / 写", fmt(d.cache_read) + " / " + fmt(d.cache_creation)) +
+      row("输出合计", fmt(d.output_total)) +
+      row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
+      row("会话", String(d.session_id || "").slice(0, 24));
+  }
+  function currentSessionId() {
+    var m = location.href.match(/session_[0-9a-fA-F-]{36}/);
+    return m ? m[0] : null;
+  }
+  function tick() {
+    if (!onKimiWeb()) { if (root) root.style.display = "none"; return; }
+    ensureRoot();
+    if (!root) return;
+    invoke("session_stats", { sessionId: currentSessionId() })
+      .then(render)
+      .catch(function () { if (root) root.style.display = "none"; });
+  }
+  setInterval(tick, 2000);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tick);
+  } else {
+    tick();
+  }
+})();
+"##;
 
 /// Windows Job Object：把 kimi.exe 绑定进带 KILL_ON_JOB_CLOSE 的作业，
 /// 使壳进程以任何方式退出（正常关闭、被强杀、崩溃）时，系统都会级联回收
@@ -91,6 +292,35 @@ struct AppState {
     quitting: Mutex<bool>,
     last_error: Mutex<String>,
     app_origin: Mutex<String>,
+    stats: Mutex<StatsState>,
+}
+
+/// 会话用量统计的增量解析状态：按会话维度聚合该会话所有 agent 的
+/// wire.jsonl（含子 agent）；切换会话时整体重置
+#[derive(Default)]
+struct StatsState {
+    session_id: String,
+    cursors: HashMap<PathBuf, WireCursor>,
+    agg: SessionAgg,
+}
+
+/// 单个 wire.jsonl 的增量读取游标
+#[derive(Default)]
+struct WireCursor {
+    offset: u64,
+    /// 最近一条 llm.request 的时间戳，用于与紧随的 usage.record 配对估算 TPS
+    last_req_time: Option<i64>,
+}
+
+#[derive(Default)]
+struct SessionAgg {
+    input_other: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+    /// 最近若干次请求的 TPS，用于计算平滑均值
+    recent_tps: VecDeque<f64>,
+    last_record_time: Option<i64>,
 }
 
 /// 允许在窗口内导航的来源：Tauri 应用自身页面与本机 kimi web 服务
@@ -310,12 +540,187 @@ fn show_window(app: AppHandle) {
     show_main_window(&app);
 }
 
+/// Kimi Code 数据根目录：优先 KIMI_CODE_HOME，默认 ~/.kimi-code
+fn kimi_code_home() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("KIMI_CODE_HOME") {
+        if !p.is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    for var in ["USERPROFILE", "HOME"] {
+        if let Ok(h) = std::env::var(var) {
+            if !h.is_empty() {
+                return Some(PathBuf::from(h).join(".kimi-code"));
+            }
+        }
+    }
+    None
+}
+
+/// 按 sessionId 定位会话目录：sessions/<workDirKey>/<sessionId>
+fn find_session_dir(home: &Path, session_id: &str) -> Option<PathBuf> {
+    for wd in std::fs::read_dir(home.join("sessions")).ok()?.flatten() {
+        let cand = wd.path().join(session_id);
+        if cand.is_dir() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// 未提供 sessionId 时的回退：取 main wire.jsonl mtime 最新的会话，
+/// 即当前最活跃会话
+fn find_latest_session_dir(home: &Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for wd in std::fs::read_dir(home.join("sessions")).ok()?.flatten() {
+        for sess in std::fs::read_dir(wd.path()).ok()?.flatten() {
+            let wire = sess.path().join("agents").join("main").join("wire.jsonl");
+            let Ok(mtime) = wire.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
+                best = Some((mtime, sess.path()));
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// 从游标位置增量读取 wire.jsonl，只处理完整行（末尾半行留下轮），
+/// 聚合 usage.record 并把每条记录与前方的 llm.request 配对估算 TPS
+fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len < cur.offset {
+        // 文件被截断重建，从头解析
+        cur.offset = 0;
+        cur.last_req_time = None;
+    }
+    if f.seek(SeekFrom::Start(cur.offset)).is_err() {
+        return;
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return;
+    }
+    let complete = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
+    cur.offset += complete as u64;
+    for line in String::from_utf8_lossy(&buf[..complete]).lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("llm.request") => {
+                cur.last_req_time = v.get("time").and_then(|t| t.as_i64());
+            }
+            Some("usage.record") => {
+                let Some(u) = v.get("usage") else { continue };
+                let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+                let output = get("output");
+                agg.input_other += get("inputOther");
+                agg.output += output;
+                agg.cache_read += get("inputCacheRead");
+                agg.cache_creation += get("inputCacheCreation");
+                let Some(t) = v.get("time").and_then(|t| t.as_i64()) else {
+                    continue;
+                };
+                agg.last_record_time = Some(agg.last_record_time.map_or(t, |x| x.max(t)));
+                // 配对前方的 llm.request：间隔即本次请求耗时（含排队/重试，
+                // 与 kimi web 内置组件口径一致的近似值）；异常间隔直接丢弃
+                if let Some(req_t) = cur.last_req_time.take() {
+                    let dur_ms = t - req_t;
+                    if (1..=300_000).contains(&dur_ms) {
+                        agg.recent_tps
+                            .push_back(output as f64 / (dur_ms as f64 / 1000.0));
+                        if agg.recent_tps.len() > 5 {
+                            agg.recent_tps.pop_front();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 返回指定（或当前最活跃）会话的累计用量与实时 TPS，
+/// 供注入 kimi web 页面的统计悬浮窗轮询
+#[tauri::command]
+fn session_stats(session_id: Option<String>, state: tauri::State<AppState>) -> serde_json::Value {
+    let not_found = serde_json::json!({ "found": false });
+    let Some(home) = kimi_code_home() else { return not_found };
+    let dir = session_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| find_session_dir(&home, s))
+        .or_else(|| find_latest_session_dir(&home));
+    let Some(dir) = dir else { return not_found };
+    let real_id = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let mut st = state.stats.lock().unwrap();
+    if st.session_id != real_id {
+        *st = StatsState {
+            session_id: real_id.clone(),
+            ..Default::default()
+        };
+    }
+    if let Ok(entries) = std::fs::read_dir(dir.join("agents")) {
+        // 拆分字段借用，避免 cursors 与 agg 同时可变借用 st
+        let StatsState { cursors, agg, .. } = &mut *st;
+        for e in entries.flatten() {
+            let wire = e.path().join("wire.jsonl");
+            if wire.is_file() {
+                let cur = cursors.entry(wire.clone()).or_default();
+                consume_wire(cur, agg, &wire);
+            }
+        }
+    }
+
+    let agg = &st.agg;
+    let input_total = agg.input_other + agg.cache_read + agg.cache_creation;
+    let hit_rate = if input_total > 0 {
+        agg.cache_read as f64 * 100.0 / input_total as f64
+    } else {
+        0.0
+    };
+    let tps_avg = if agg.recent_tps.is_empty() {
+        0.0
+    } else {
+        agg.recent_tps.iter().sum::<f64>() / agg.recent_tps.len() as f64
+    };
+    serde_json::json!({
+        "found": true,
+        "session_id": real_id,
+        "has_tps": !agg.recent_tps.is_empty(),
+        "tps_avg": tps_avg,
+        "tps_latest": agg.recent_tps.back().copied().unwrap_or(0.0),
+        "input_total": input_total,
+        "output_total": agg.output,
+        "cache_read": agg.cache_read,
+        "cache_creation": agg.cache_creation,
+        "cache_hit_rate": hit_rate,
+        "last_record_time": agg.last_record_time,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![last_error, restart_server, show_window])
+        .invoke_handler(tauri::generate_handler![
+            last_error,
+            restart_server,
+            show_window,
+            session_stats
+        ])
         .setup(|app| {
             // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
             let tray_menu = MenuBuilder::new(app)

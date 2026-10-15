@@ -357,6 +357,12 @@
           "markdownDescription": "Enables the restart_server command without any pre-configured scope."
         },
         {
+          "description": "Enables the session_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-stats",
+          "markdownDescription": "Enables the session_stats command without any pre-configured scope."
+        },
+        {
           "description": "Enables the show_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-show-window",
@@ -373,6 +379,12 @@
           "type": "string",
           "const": "deny-restart-server",
           "markdownDescription": "Denies the restart_server command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the session_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-stats",
+          "markdownDescription": "Denies the session_stats command without any pre-configured scope."
         },
         {
           "description": "Denies the show_window command without any pre-configured scope.",

@@ -6,7 +6,7 @@ use std::time::Duration;
 use regex::Regex;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::webview::NewWindowResponse;
+use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
 const KIMI_PORT: u16 = 58627;
@@ -304,12 +304,18 @@ fn restart_server(app: AppHandle) {
     start_server(&app);
 }
 
+// 供注入脚本暴露的 window.kimiDesktop.showWindow 调用：显示并聚焦主窗口
+#[tauri::command]
+fn show_window(app: AppHandle) {
+    show_main_window(&app);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![last_error, restart_server])
+        .invoke_handler(tauri::generate_handler![last_error, restart_server, show_window])
         .setup(|app| {
             // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
             let tray_menu = MenuBuilder::new(app)
@@ -365,16 +371,31 @@ pub fn run() {
                 .center()
                 // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
                 .disable_drag_drop_handler()
-                // WebView2 默认不响应浏览器式刷新快捷键，注入脚本补齐：
-                // F5 / Ctrl+R 触发页面重载，用于长时间会话后释放渲染进程内存
+                // 注入脚本补齐两块 WebView2 缺失行为：
+                // 1. F5 / Ctrl+R 触发页面重载（WebView2 默认不响应浏览器式刷新快捷键），
+                //    用于长时间会话后释放渲染进程内存
+                // 2. 暴露 kimi web 约定的桌面桥 window.kimiDesktop.showWindow：
+                //    通知 toast 被点击时页面会调用它唤起主窗口（托盘驻留期间窗口可能只是被隐藏）
                 .initialization_script(
                     r#"window.addEventListener("keydown", (e) => {
                         if (e.key === "F5" || (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "r" || e.key === "R"))) {
                             e.preventDefault();
                             location.reload();
                         }
-                    });"#,
+                    });
+                    (function () {
+                        if (!window.__TAURI__) return;
+                        window.kimiDesktop = {
+                            showWindow: () => { window.__TAURI__.core.invoke("show_window").catch(() => {}) }
+                        };
+                    })();"#,
                 )
+                // 放行 Web 通知权限：WebView2 对未应答的权限请求默认拒绝，
+                // 页面的 Web Notification API 会因此被静默吞掉
+                .on_permission_request(|_, kind| match kind {
+                    PermissionKind::Notifications => PermissionResponse::Allow,
+                    _ => PermissionResponse::Default,
+                })
                 .on_navigation(|url| {
                     if is_local(url) {
                         true

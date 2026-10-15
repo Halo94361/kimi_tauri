@@ -345,6 +345,42 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the last_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-last-error",
+          "markdownDescription": "Enables the last_error command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the restart_server command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-restart-server",
+          "markdownDescription": "Enables the restart_server command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the show_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-show-window",
+          "markdownDescription": "Enables the show_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the last_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-last-error",
+          "markdownDescription": "Denies the last_error command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the restart_server command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-restart-server",
+          "markdownDescription": "Denies the restart_server command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the show_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-show-window",
+          "markdownDescription": "Denies the show_window command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
@@ -379,6 +415,12 @@
           "type": "string",
           "const": "core:app:allow-default-window-icon",
           "markdownDescription": "Enables the default_window_icon command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:app:allow-exit",
+          "markdownDescription": "Enables the exit command without any pre-configured scope."
         },
         {
           "description": "Enables the fetch_data_store_identifiers command without any pre-configured scope.",
@@ -469,6 +511,12 @@
           "type": "string",
           "const": "core:app:deny-default-window-icon",
           "markdownDescription": "Denies the default_window_icon command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:app:deny-exit",
+          "markdownDescription": "Denies the exit command without any pre-configured scope."
         },
         {
           "description": "Denies the fetch_data_store_identifiers command without any pre-configured scope.",
@@ -1731,6 +1779,12 @@
           "markdownDescription": "Enables the set_fullscreen command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_fullscreen_on_monitor command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:window:allow-set-fullscreen-on-monitor",
+          "markdownDescription": "Enables the set_fullscreen_on_monitor command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_icon command without any pre-configured scope.",
           "type": "string",
           "const": "core:window:allow-set-icon",
@@ -2197,6 +2251,12 @@
           "type": "string",
           "const": "core:window:deny-set-fullscreen",
           "markdownDescription": "Denies the set_fullscreen command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_fullscreen_on_monitor command without any pre-configured scope.",
+          "type": "string",
+          "const": "core:window:deny-set-fullscreen-on-monitor",
+          "markdownDescription": "Denies the set_fullscreen_on_monitor command without any pre-configured scope."
         },
         {
           "description": "Denies the set_icon command without any pre-configured scope.",

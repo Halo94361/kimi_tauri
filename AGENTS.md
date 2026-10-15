@@ -17,6 +17,7 @@
 - **原生文件拖放**：关闭 Tauri 默认的拖放捕获，使 Web 页面能够原生接收 HTML5 文件拖放（如拖拽文件/图片至对话框）。
 - **页面刷新快捷键**：通过 `initialization_script` 注入按键监听，支持 F5 / Ctrl+R 重载页面（WebView2 默认不响应浏览器式刷新快捷键），用于长时间会话后手动释放渲染进程内存。
 - **系统托盘驻留**：应用带系统托盘图标，关闭窗口仅隐藏（kimi web 子进程继续运行，会话不丢），托盘菜单"显示窗口"或左键单击托盘图标唤回窗口，只有托盘菜单"退出"才真正结束应用与子进程。
+- **Web 通知唤起**：放行 WebView2 通知权限（`on_permission_request`），页面的 Web Notification API 以原生 toast 正常弹出；注入脚本暴露 kimi web 约定的 `window.kimiDesktop.showWindow` 桥，点击 toast 唤出托盘隐藏的主窗口。
 
 ---
 
@@ -35,7 +36,8 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
  ├─ 5. 导航与外链安全管控：
  │     ├─ 本地来源 (127.0.0.1, localhost, tauri.localhost) 允许在窗口内导航
  │     └─ 外部链接拦截并通过 tauri-plugin-opener 调用系统默认浏览器打开
- └─ 6. 异常与生命周期管理：
+ ├─ 6. Web 通知：on_permission_request 放行通知权限，toast 由 WebView2 原生 UI 弹出，点击经注入脚本回调唤起主窗口
+ └─ 7. 异常与生命周期管理：
        ├─ 窗口关闭时：拦截关闭请求并隐藏窗口（托盘驻留，子进程继续运行）
        ├─ 托盘菜单"退出"时：置 quitting 标志、kill 子进程并 wait 清理，退出事件循环
        ├─ 子进程异常退出时：导航至 ui/error.html 并唤出窗口，提供错误信息与 restart_server 命令
@@ -59,14 +61,20 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 4. **IPC 命令 (Tauri Commands)**：
    - `last_error`：返回 Rust 全局状态中记录的最后一次错误信息字符串。
    - `restart_server`：重置状态、导航回 `index.html` 并重新拉起 `kimi web`。
+   - `show_window`：显示并聚焦主窗口，由注入脚本暴露的 `window.kimiDesktop.showWindow`（kimi web 通知点击回调）调用。
 5. **系统托盘（Tray Icon）**：
    - `TrayIconBuilder` 创建托盘图标（复用应用窗口图标），菜单含"显示窗口"/"退出"两项；左键单击托盘图标同样唤回窗口。
    - `CloseRequested` 拦截：非退出路径一律 `prevent_close()` + 隐藏窗口，kimi web 子进程保持运行；仅托盘"退出"走 `quit_app`（置 `quitting` 标志 → `kill_child` → `app.exit(0)`）。关闭拦截前检查 `quitting` 标志，保证退出流程中窗口能正常销毁。
    - `show_error` 在窗口隐藏时会顺带唤出窗口，确保托盘驻留期间服务异常可被用户感知。
-5. **进程树级联回收（Windows Job Object）**：
+6. **进程树级联回收（Windows Job Object）**：
    - `kimi.exe` 被杀（`TerminateProcess`）时其自身没有机会清理 MCP 孙进程，直接 kill 会导致孤儿进程残留。
    - 因此 spawn 成功后立即把 `kimi.exe` 挂入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`lib.rs` 中 `win_job` 模块），此后 `kimi.exe` 启动的所有孙进程自动归入同一作业；壳进程以任何方式退出（正常关闭、被强杀、崩溃）导致 job handle 关闭时，系统级联回收整棵进程树。
    - job handle 存入 `AppState` 随应用生命周期持有；job 创建/绑定失败时退回原有的直接 kill 清理，不影响启动。
+7. **Web 通知权限放行（`on_permission_request`）**：
+   - WebView2 对未应答的权限请求默认拒绝，页面的 Web Notification API 会被静默吞掉；窗口构建时放行 `PermissionKind::Notifications`，其余权限类型保持默认。
+   - 通知 toast 由 WebView2 原生 UI 显示（未接管 `NotificationReceived`）；点击 toast 时 WebView2 向页面派发通知的 `click` 事件，kimi web 的 onclick 回调随即调用注入脚本暴露的 `window.kimiDesktop.showWindow` 桥，经 `show_window` 命令唤起（托盘隐藏的）主窗口。
+   - remote 源（`http://127.0.0.1:<port>`）调用自定义命令受 tauri ACL 管控：`build.rs` 通过 `AppManifest.commands` 为命令自动生成 `allow-*` 权限标识，`capabilities/kimi-remote.json` 按 `remote.urls` 放行 `allow-show-window`；本地源页面的命令权限声明在 `capabilities/default.json`。
+   - 依赖 tauri ≥ 2.12（该版本引入 `on_permission_request`）。
 
 ---
 
@@ -74,7 +82,7 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 
 - **语言与框架**：
   - Rust (Edition 2021)
-  - Tauri v2 (`tauri = "2"` 含 `tray-icon` feature，用于系统托盘, `tauri-build = "2"`)
+  - Tauri v2 (`tauri = "2"`（需 ≥2.12，提供 `on_permission_request`），含 `tray-icon` feature 用于系统托盘，`tauri-build = "2"`)
   - Tauri 插件：`tauri-plugin-opener = "2"`（用于系统默认浏览器打开外链）
   - 正则引擎：`regex = "1"`
   - Windows API：`windows-sys = "0.59"`（`Win32_System_JobObjects`，仅 Windows 下编译，用于 Job Object 进程树级联回收）
@@ -102,9 +110,10 @@ tauri_kimi/
     ├── Cargo.toml             # Rust 依赖声明与 Release 构建优化配置
     ├── Cargo.lock             # Rust 依赖版本锁定
     ├── tauri.conf.json        # Tauri v2 应用配置文件
-    ├── build.rs               # Tauri 构建脚本
+    ├── build.rs               # Tauri 构建脚本（声明 app ACL manifest，为自定义命令生成 allow-* 权限）
     ├── capabilities/          # Tauri v2 权限配置
-    │   └── default.json       # 主窗口权限声明（core:default, opener:default）
+    │   ├── default.json       # 本地源（壳内建页面）权限声明（core/opener 与本地自定义命令）
+    │   └── kimi-remote.json   # remote 源（kimi web 页面）权限声明（allow-show-window）
     ├── icons/                 # 各平台打包图标资源（ico, icns, png, Android/iOS）
     └── src/                   # Rust 源码目录
         ├── main.rs            # 程序入口点（配置 release 下无控制台窗口）

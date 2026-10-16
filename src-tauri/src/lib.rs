@@ -73,9 +73,10 @@ const REFRESH_BRIDGE_JS: &str = r#"window.addEventListener("keydown", (e) => {
 })();"#;
 
 /// 注入 kimi web 页面的用量统计悬浮窗：
-/// 每 2s 轮询 session_stats 命令，渲染可拖动、跟随页面深浅主题的
-/// 半透明毛玻璃浮窗（位置与折叠状态存 localStorage）；仅在 127.0.0.1/localhost
-/// 的 kimi web 页面启用，壳内建 index/error 页不显示
+/// 每 2s 轮询 session_stats（本会话）与 daily_stats（今日全部会话）命令，
+/// 渲染可拖动、跟随页面深浅主题的半透明毛玻璃浮窗（位置与折叠状态存
+/// localStorage），明细面板分「本会话」「今日（全部会话）」两区；
+/// 仅在 127.0.0.1/localhost 的 kimi web 页面启用，壳内建 index/error 页不显示
 const STATS_OVERLAY_JS: &str = r##"
 (function () {
   if (!window.__TAURI__) return;
@@ -84,7 +85,11 @@ const STATS_OVERLAY_JS: &str = r##"
   var root = null, bar = null, dot = null, detail = null, detailBody = null, pinBtn = null;
   var folded = localStorage.getItem(FOLD_KEY) === "1";
   var pinned = localStorage.getItem(PIN_KEY) === "1";
-  var lastData = null;
+  var lastData = null, lastDaily = null;
+
+  function hasData() {
+    return (lastData && lastData.found) || (lastDaily && lastDaily.found);
+  }
 
   function onKimiWeb() {
     return location.hostname === "127.0.0.1" || location.hostname === "localhost";
@@ -118,7 +123,7 @@ const STATS_OVERLAY_JS: &str = r##"
     bar.style.display = folded ? "none" : "flex";
     dot.style.display = folded ? "flex" : "none";
     // 锁定状态下详情面板常驻；折叠成小圆点时强制收起
-    detail.style.display = (!folded && pinned && lastData && lastData.found) ? "block" : "none";
+    detail.style.display = (!folded && pinned && hasData()) ? "block" : "none";
   }
   function applyPin() {
     pinBtn.style.opacity = pinned ? "1" : "0.35";
@@ -189,7 +194,7 @@ const STATS_OVERLAY_JS: &str = r##"
     head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:2px";
     var title = document.createElement("span");
     title.style.opacity = "0.5";
-    title.textContent = "会话用量";
+    title.textContent = "本会话";
     pinBtn = document.createElement("span");
     pinBtn.textContent = "📌";
     pinBtn.title = "锁定 / 自动收起";
@@ -205,7 +210,7 @@ const STATS_OVERLAY_JS: &str = r##"
     root.appendChild(bar); root.appendChild(dot); root.appendChild(detail);
     document.body.appendChild(root);
     root.addEventListener("mouseenter", function () {
-      if (!folded && lastData && lastData.found) detail.style.display = "block";
+      if (!folded && hasData()) detail.style.display = "block";
     });
     root.addEventListener("mouseleave", function () { if (!pinned) detail.style.display = "none"; });
     root.addEventListener("dblclick", function (e) {
@@ -232,41 +237,70 @@ const STATS_OVERLAY_JS: &str = r##"
     return '<div style="display:flex;justify-content:space-between;gap:16px">' +
       '<span style="opacity:0.65">' + k + "</span><span>" + v + "</span></div>";
   }
-  function render(d) {
-    lastData = d;
-    if (!d || !d.found) { root.style.display = "none"; return; }
+  function render() {
+    var d = lastData, daily = lastDaily;
+    var sFound = d && d.found, dFound = daily && daily.found;
+    if (!sFound && !dFound) { root.style.display = "none"; return; }
     root.style.display = "block";
-    // 空闲 30s 后 TPS 显示 --，避免残留旧值误导
-    var idle = !d.last_record_time || (Date.now() - d.last_record_time > 30000);
-    var tps = (!d.has_tps || idle) ? "--" : d.tps_avg.toFixed(1);
-    bar.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
-      " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
-    detailBody.innerHTML =
-      row("TPS 均值（近5次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
-      row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
-      row("输入合计", fmt(d.input_total)) +
-      row("缓存读", fmt(d.cache_read)) +
-      row("输出合计", fmt(d.output_total)) +
-      row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
-      row("会话", String(d.session_id || "").slice(0, 24));
+    if (sFound) {
+      // 空闲 30s 后 TPS 显示 --，避免残留旧值误导
+      var idle = !d.last_record_time || (Date.now() - d.last_record_time > 30000);
+      var tps = (!d.has_tps || idle) ? "--" : d.tps_avg.toFixed(1);
+      bar.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
+        " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
+    } else {
+      // 会话页尚未产生数据时，横条退化为今日汇总
+      bar.textContent = "⚡ 今日 ↑" + fmt(daily.input_total) + " ↓" + fmt(daily.output_total) +
+        " · 缓存 " + daily.cache_hit_rate.toFixed(0) + "%";
+    }
+    var html = "";
+    if (sFound) {
+      html +=
+        row("TPS 均值（近5次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
+        row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
+        row("输入合计", fmt(d.input_total)) +
+        row("缓存读", fmt(d.cache_read)) +
+        row("输出合计", fmt(d.output_total)) +
+        row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
+        row("会话", String(d.session_id || "").slice(0, 24));
+    }
+    html += '<div style="opacity:0.5;border-top:1px solid rgba(128,128,128,0.35);margin:6px 0 2px;padding-top:4px">今日（全部会话）</div>';
+    if (dFound) {
+      html +=
+        row("输入合计", fmt(daily.input_total)) +
+        row("缓存读", fmt(daily.cache_read)) +
+        row("输出合计", fmt(daily.output_total)) +
+        row("缓存命中率", daily.cache_hit_rate.toFixed(1) + "%");
+    } else {
+      html += '<div style="opacity:0.5">暂无数据</div>';
+    }
+    detailBody.innerHTML = html;
   }
   function currentSessionId() {
     var m = location.href.match(/session_[0-9a-fA-F-]{36}/);
     return m ? m[0] : null;
   }
-  function tick() {
+  // 会话统计 2s 一轮（TPS 需要跟手）；今日汇总 10s 一轮（变化慢，无需高频）
+  function tickSession() {
     if (!onKimiWeb()) { if (root) root.style.display = "none"; return; }
     ensureRoot();
     if (!root) return;
     invoke("session_stats", { sessionId: currentSessionId() })
-      .then(render)
-      .catch(function () { if (root) root.style.display = "none"; });
+      .then(function (d) { lastData = d; render(); })
+      .catch(function () { lastData = null; render(); });
   }
-  setInterval(tick, 2000);
+  function tickDaily() {
+    if (!onKimiWeb() || !root) return;
+    invoke("daily_stats")
+      .then(function (d) { lastDaily = d; render(); })
+      .catch(function () { lastDaily = null; render(); });
+  }
+  setInterval(tickSession, 2000);
+  setInterval(tickDaily, 10000);
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", tick);
+    document.addEventListener("DOMContentLoaded", function () { tickSession(); tickDaily(); });
   } else {
-    tick();
+    tickSession(); tickDaily();
   }
 })();
 "##;
@@ -351,6 +385,8 @@ struct AppState {
     last_error: Mutex<String>,
     app_origin: Mutex<String>,
     stats: Mutex<StatsState>,
+    /// 今日用量（跨会话聚合）：按本地日期分桶，跨天时整体重置
+    daily: Mutex<DailyStats>,
     /// 当前活动选项卡："local" | "remote"
     active_tab: Mutex<String>,
     /// 最近一次采样得到的页面主题（true=深色），用于去重后只在变化时通知 tabbar
@@ -385,6 +421,23 @@ struct SessionAgg {
     last_record_time: Option<i64>,
 }
 
+/// 今日用量聚合状态：cursors 记录各 wire.jsonl 的增量读取位置，
+/// date 为本地日期（yyyy-mm-dd），跨天时整体重置并重扫
+#[derive(Default)]
+struct DailyStats {
+    date: String,
+    cursors: HashMap<PathBuf, u64>,
+    agg: DailyAgg,
+}
+
+#[derive(Default)]
+struct DailyAgg {
+    input_other: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+}
+
 /// 允许在窗口内导航的来源：Tauri 应用自身页面与本机 kimi web 服务
 fn is_local(url: &Url) -> bool {
     match url.host_str() {
@@ -407,16 +460,32 @@ fn open_external(url: &Url) {
     let _ = tauri_plugin_opener::open_url(url.as_str(), None::<&str>);
 }
 
+/// 选定 kimi web 监听端口：首选固定端口，被占用时让系统分配空闲端口。
+/// 端口在 spawn 前选定并传入 --port，保证传入端口与实际监听端口一致；
+/// stdout 正则解析仅作确认。drop 监听到 kimi 绑定之间有极小竞争窗口，
+/// 最坏结果退化为启动失败进错误页，可接受
+fn pick_port() -> u16 {
+    use std::net::TcpListener;
+    if TcpListener::bind(("127.0.0.1", KIMI_PORT)).is_ok() {
+        return KIMI_PORT;
+    }
+    TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .unwrap_or(KIMI_PORT)
+}
+
 /// 依次尝试 PATH 上的 kimi 与已知的 native 安装路径
 fn spawn_kimi() -> Result<Child, String> {
     let mut candidates: Vec<String> = vec!["kimi".into()];
     if let Ok(home) = std::env::var("USERPROFILE") {
         candidates.push(format!(r"{home}\.kimi-code\bin\kimi.exe"));
     }
+    let port = pick_port();
     let mut last_err = String::new();
     for cand in &candidates {
         let mut cmd = Command::new(cand);
-        cmd.args(["web", "--no-open", "--port", &KIMI_PORT.to_string()])
+        cmd.args(["web", "--no-open", "--port", &port.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -847,6 +916,132 @@ fn session_stats(session_id: Option<String>, state: tauri::State<AppState>) -> s
     })
 }
 
+/// 本地今日日期字符串（yyyy-mm-dd）与今日 00:00 的 epoch 毫秒；
+/// 获取本地时区失败时回退 UTC
+fn local_today() -> (String, i64) {
+    use time::{OffsetDateTime, UtcOffset};
+    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+    let today = OffsetDateTime::now_utc().to_offset(offset).date();
+    let midnight = today.midnight().assume_offset(offset).unix_timestamp() * 1000;
+    (today.to_string(), midnight)
+}
+
+/// 从游标位置增量读取 wire.jsonl，只聚合 time >= day_start 的 usage.record
+/// （按事件时间戳直接分桶到今日，避免跨天会话重复计算）；
+/// 末尾半行留下轮，文件被截断重建时从头解析
+fn consume_wire_today(offset: &mut u64, agg: &mut DailyAgg, path: &Path, day_start: i64) {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len < *offset {
+        *offset = 0;
+    }
+    if f.seek(SeekFrom::Start(*offset)).is_err() {
+        return;
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return;
+    }
+    let complete = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
+    *offset += complete as u64;
+    for line in String::from_utf8_lossy(&buf[..complete]).lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("usage.record") {
+            continue;
+        }
+        let Some(t) = v.get("time").and_then(|t| t.as_i64()) else {
+            continue;
+        };
+        if t < day_start {
+            continue;
+        }
+        let Some(u) = v.get("usage") else { continue };
+        let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        agg.input_other += get("inputOther");
+        agg.output += get("output");
+        agg.cache_read += get("inputCacheRead");
+        agg.cache_creation += get("inputCacheCreation");
+    }
+}
+
+/// 返回本地今日全部会话（含子 agent）的累计用量，供统计悬浮窗轮询。
+/// 首次调用对今日活跃文件全量回填，之后按 offset 增量解析；跨天整体重置。
+/// async：同步命令跑在主线程，首次回填的目录遍历可能阻塞 UI
+/// （含引用参数的 async 命令按 Tauri 约定必须返回 Result；本命令不失败，恒为 Ok）
+#[tauri::command]
+async fn daily_stats(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, ()> {
+    let not_found = serde_json::json!({ "found": false });
+    let Some(home) = kimi_code_home() else {
+        return Ok(not_found);
+    };
+    let (today, day_start) = local_today();
+
+    let mut st = state.daily.lock().unwrap();
+    if st.date != today {
+        *st = DailyStats {
+            date: today,
+            ..Default::default()
+        };
+    }
+
+    let mut active_today = false;
+    if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
+        // 拆分字段借用，避免 cursors 与 agg 同时可变借用 st
+        let DailyStats { cursors, agg, .. } = &mut *st;
+        for wd in workdirs.flatten() {
+            let Ok(sessions) = std::fs::read_dir(wd.path()) else {
+                continue;
+            };
+            for sess in sessions.flatten() {
+                let Ok(agents) = std::fs::read_dir(sess.path().join("agents")) else {
+                    continue;
+                };
+                for agent in agents.flatten() {
+                    let wire = agent.path().join("wire.jsonl");
+                    if !wire.is_file() {
+                        continue;
+                    }
+                    // append-only：mtime 早于今日 0 点的文件不可能含今日事件
+                    let mtime_ms = wire
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    if mtime_ms < day_start {
+                        continue;
+                    }
+                    active_today = true;
+                    let offset = cursors.entry(wire.clone()).or_insert(0);
+                    consume_wire_today(offset, agg, &wire, day_start);
+                }
+            }
+        }
+    }
+
+    let agg = &st.agg;
+    let input_total = agg.input_other + agg.cache_read + agg.cache_creation;
+    let hit_rate = if input_total > 0 {
+        agg.cache_read as f64 * 100.0 / input_total as f64
+    } else {
+        0.0
+    };
+    Ok(serde_json::json!({
+        "found": active_today,
+        "input_total": input_total,
+        "output_total": agg.output,
+        "cache_read": agg.cache_read,
+        "cache_hit_rate": hit_rate,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -857,6 +1052,7 @@ pub fn run() {
             restart_server,
             show_window,
             session_stats,
+            daily_stats,
             switch_tab,
             report_theme
         ])

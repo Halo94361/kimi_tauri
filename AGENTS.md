@@ -20,7 +20,7 @@
 - **页面刷新快捷键**：通过 `initialization_script` 注入按键监听，支持 F5 / Ctrl+R 重载页面（WebView2 默认不响应浏览器式刷新快捷键），用于长时间会话后手动释放渲染进程内存。
 - **系统托盘驻留**：应用带系统托盘图标，关闭窗口仅隐藏（kimi web 子进程继续运行，会话不丢），托盘菜单"显示窗口"或左键单击托盘图标唤回窗口，只有托盘菜单"退出"才真正结束应用与子进程。
 - **Web 通知唤起**：放行 WebView2 通知权限（`on_permission_request`），页面的 Web Notification API 以原生 toast 正常弹出；注入脚本暴露 kimi web 约定的 `window.kimiDesktop.showWindow` 桥，点击 toast 唤出托盘隐藏的主窗口。
-- **实时用量悬浮窗**：向 kimi web 页面注入统计浮窗，轮询 Rust 侧 `session_stats` 命令，实时显示 TPS（近 5 次均值）、当前会话 token 消耗与缓存命中率；浮窗为跟随页面深浅主题的半透明毛玻璃样式，可拖动（localStorage 记忆位置）、双击折叠、悬停展开明细。
+- **实时用量悬浮窗**：向 kimi web 页面注入统计浮窗，轮询 Rust 侧 `session_stats`（本会话，2s）与 `daily_stats`（今日全部会话汇总，10s）命令，实时显示 TPS（近 5 次均值）、当前会话与今日 token 消耗、缓存命中率；浮窗为跟随页面深浅主题的半透明毛玻璃样式，可拖动（localStorage 记忆位置）、双击折叠、悬停展开明细。
 
 ---
 
@@ -31,7 +31,7 @@
 ```
 tauri_kimi.exe (Tauri 壳 / Rust 宿主)
  ├─ 1. 初始化窗口：按主显示器工作区比例自适应计算尺寸，加载本地 ui/index.html
- ├─ 2. 启动子进程：无黑窗执行 kimi web --no-open --port 58627
+ ├─ 2. 启动子进程：无黑窗执行 kimi web --no-open --port <port>（首选 58627，被占用时自动改用系统分配的空闲端口）
  ├─ 3. 动态探测与鉴权：
  │     ├─ 读取子进程 stdout，通过正则实时解析实际监听端口与 Bearer Token
  │     └─ 启动 30s 看门狗线程监控启动超时
@@ -52,6 +52,7 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 1. **子进程探测与执行 (`spawn_kimi`)**：
    - 优先查找系统 `PATH` 中的 `kimi` 命令。
    - 备选查找固定安装路径：`%USERPROFILE%\.kimi-code\bin\kimi.exe`。
+   - 端口由 `pick_port` 在 spawn 前选定：首选固定端口 58627，被占用时让系统分配空闲端口；选定端口经 `--port` 传入，保证传入端口与实际监听端口一致（stdout 正则解析仅作确认）。已知取舍：kimi web 的主题等页面设置存于 localStorage（按 origin 隔离，端口即隔离边界），回退到非默认端口时这些设置会像首次使用一样重置；登录态与会话数据不受影响。
    - 在 Windows 下设置进程创建标志 `CREATE_NO_WINDOW = 0x08000000`，彻底防止控制台黑窗弹出。
 2. **端口与 Token 正则解析**：
    - 匹配完整带 Token URL：`http://[\w.%-]+:(\d+)[^\s"']*#token=([^\s"']+)`
@@ -77,13 +78,14 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
    - WebView2 对未应答的权限请求默认拒绝，页面的 Web Notification API 会被静默吞掉；窗口构建时放行 `PermissionKind::Notifications`，其余权限类型保持默认。
    - 通知 toast 由 WebView2 原生 UI 显示（未接管 `NotificationReceived`）；点击 toast 时 WebView2 向页面派发通知的 `click` 事件，kimi web 的 onclick 回调随即调用注入脚本暴露的 `window.kimiDesktop.showWindow` 桥，经 `show_window` 命令唤起（托盘隐藏的）主窗口。
    - 桌面桥契约：kimi web 前端会探测 `window.kimiDesktop` 上的宿主方法，部分调用（`onUpdateStatus` / `getUpdateStatus` / `setTheme`）不做存在性检查，缺失会让设置面板初始化时抛 `TypeError` 并显示错误边界"出错了"。因此桥需提供最小空实现：`getUpdateStatus` 返回 `{state:"idle"}`（前端据此隐藏更新入口）、`onUpdateStatus` 返回退订函数、`setTheme` / `log` 为空实现/转 console。kimi CLI 升级后可能出现新方法，报错时应先排查此处。
-   - remote 源（`http://127.0.0.1:<port>`）调用自定义命令受 tauri ACL 管控：`build.rs` 通过 `AppManifest.commands` 为命令自动生成 `allow-*` 权限标识，`capabilities/kimi-remote.json` 按 `remote.urls` 放行 `allow-show-window` 与 `allow-session-stats`；本地源页面的命令权限声明在 `capabilities/default.json`。
+   - remote 源（`http://127.0.0.1:<port>`）调用自定义命令受 tauri ACL 管控：`build.rs` 通过 `AppManifest.commands` 为命令自动生成 `allow-*` 权限标识，`capabilities/kimi-remote.json` 按 `remote.urls` 放行 `allow-show-window`、`allow-session-stats` 与 `allow-daily-stats`；本地源页面的命令权限声明在 `capabilities/default.json`。
    - 依赖 tauri ≥ 2.12（该版本引入 `on_permission_request`）。
 8. **会话用量统计悬浮窗（`session_stats` + `STATS_OVERLAY_JS`）**：
    - 数据源：`~/.kimi-code/sessions/<workDirKey>/<sessionId>/agents/*/wire.jsonl`（含子 agent）中每行一个 JSON 事件；`usage.record` 携带 `inputOther / output / inputCacheRead / inputCacheCreation`，`llm.request` 提供请求发起时间。
    - Rust 侧 `session_stats` 命令：按 sessionId 定位会话目录（注入脚本从页面 URL 正则提取 `session_<uuid>`；提取不到时回退 main wire.jsonl mtime 最新的会话），对每个 wire 文件按 offset 增量解析（末尾半行留下轮），换会话时重置聚合状态。
    - 统计口径：会话 token = 全部 agent 的 `usage.record` 累加；缓存命中率 = `ΣinputCacheRead / Σ(inputOther+inputCacheRead+inputCacheCreation)`；TPS = 每条 `usage.record` 与前方最近 `llm.request` 配对（间隔 ≤300s 有效），取最近 5 次均值。
-   - 注入脚本 `STATS_OVERLAY_JS`：仅在 127.0.0.1/localhost 页面启用，每 2s 轮询渲染可拖动的半透明毛玻璃浮窗（深浅色主题通过 documentElement 属性 + `prefers-color-scheme` 双通道跟随），位置/折叠/锁定状态存 localStorage；双击折叠为小圆点，悬停展开与横条同宽的明细面板（面板内 📌 按钮锁定常驻，未锁定时鼠标离开自动收起），空闲 30s TPS 显示 `--`。
+   - Rust 侧 `daily_stats` 命令（async，避免首次回填阻塞主线程）：聚合本地今日全部会话的 `usage.record`；按事件自带 epoch 毫秒时间戳直接分桶到本地日期（时区换算用 `time` crate 的 `local-offset`，失败回退 UTC），天然避免跨天会话重复计算；mtime 早于今日 0 点的文件跳过（append-only），其余按 offset 增量解析，跨天时整体重置。
+   - 注入脚本 `STATS_OVERLAY_JS`：仅在 127.0.0.1/localhost 页面启用，会话统计 2s 一轮、今日汇总 10s 一轮，渲染可拖动的半透明毛玻璃浮窗（深浅色主题通过 documentElement 属性 + `prefers-color-scheme` 双通道跟随），位置/折叠/锁定状态存 localStorage；双击折叠为小圆点，悬停展开与横条同宽的明细面板（分「本会话」「今日（全部会话）」两区，面板内 📌 按钮锁定常驻，未锁定时鼠标离开自动收起），空闲 30s TPS 显示 `--`。
 ---
 
 ## 3. 技术栈与环境依赖 (Technology Stack)
@@ -94,6 +96,7 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
   - Tauri 插件：`tauri-plugin-opener = "2"`（用于系统默认浏览器打开外链）
   - 正则引擎：`regex = "1"`
   - JSON 解析：`serde_json = "1"`（增量解析 wire.jsonl 事件行，用于会话用量统计）
+  - 时间换算：`time = "0.3"`（`local-offset` feature，epoch 毫秒 → 本地日期，用于今日用量分桶；std 无法获取本地时区）
   - Windows API：`windows-sys = "0.59"`（`Win32_System_JobObjects`，仅 Windows 下编译，用于 Job Object 进程树级联回收）
 - **工具链要求**：
   - Rust 编译器：`rustc` / `cargo` (支持 `x86_64-pc-windows-gnu` 或 `x86_64-pc-windows-msvc`)
@@ -122,7 +125,7 @@ tauri_kimi/
     ├── build.rs               # Tauri 构建脚本（声明 app ACL manifest，为自定义命令生成 allow-* 权限）
     ├── capabilities/          # Tauri v2 权限配置
     │   ├── default.json       # 本地源（壳内建页面）权限声明（core/opener 与本地自定义命令）
-    │   └── kimi-remote.json   # remote 源（kimi web 页面）权限声明（allow-show-window）
+    │   └── kimi-remote.json   # remote 源（kimi web 页面）权限声明（allow-show-window / allow-session-stats / allow-daily-stats）
     ├── icons/                 # 各平台打包图标资源（ico, icns, png, Android/iOS）
     └── src/                   # Rust 源码目录
         ├── main.rs            # 程序入口点（配置 release 下无控制台窗口）

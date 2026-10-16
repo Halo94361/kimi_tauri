@@ -345,6 +345,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the daily_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-daily-stats",
+          "markdownDescription": "Enables the daily_stats command without any pre-configured scope."
+        },
+        {
           "description": "Enables the last_error command without any pre-configured scope.",
           "type": "string",
           "const": "allow-last-error",
@@ -379,6 +385,12 @@
           "type": "string",
           "const": "allow-switch-tab",
           "markdownDescription": "Enables the switch_tab command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the daily_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-daily-stats",
+          "markdownDescription": "Denies the daily_stats command without any pre-configured scope."
         },
         {
           "description": "Denies the last_error command without any pre-configured scope.",

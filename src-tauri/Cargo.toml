@@ -17,6 +17,8 @@ tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-opener = "2"
 regex = "1"
 serde_json = "1"
+# std 无法获取本地时区；用量统计按本地日期分桶需要 epoch 毫秒 → 本地日期换算
+time = { version = "0.3", features = ["local-offset"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

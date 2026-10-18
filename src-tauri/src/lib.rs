@@ -485,7 +485,9 @@ fn spawn_kimi() -> Result<Child, String> {
     let mut last_err = String::new();
     for cand in &candidates {
         let mut cmd = Command::new(cand);
-        cmd.args(["web", "--no-open", "--port", &port.to_string()])
+        // --rc：本地 web 启动的同时注册到 Kimi Remote Control，
+        // 远端（手机/另一台电脑）可通过 code-rc.kimi.com 接管本机会话
+        cmd.args(["web", "--rc", "--no-open", "--port", &port.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

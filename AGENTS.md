@@ -31,7 +31,7 @@
 ```
 tauri_kimi.exe (Tauri 壳 / Rust 宿主)
  ├─ 1. 初始化窗口：按主显示器工作区比例自适应计算尺寸，加载本地 ui/index.html
- ├─ 2. 启动子进程：无黑窗执行 kimi web --no-open --port <port>（首选 58627，被占用时自动改用系统分配的空闲端口）
+ ├─ 2. 启动子进程：无黑窗执行 kimi web --rc --no-open --port <port>（首选 58627，被占用时自动改用系统分配的空闲端口）
  ├─ 3. 动态探测与鉴权：
  │     ├─ 读取子进程 stdout，通过正则实时解析实际监听端口与 Bearer Token
  │     └─ 启动 30s 看门狗线程监控启动超时
@@ -52,6 +52,7 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 1. **子进程探测与执行 (`spawn_kimi`)**：
    - 优先查找系统 `PATH` 中的 `kimi` 命令。
    - 备选查找固定安装路径：`%USERPROFILE%\.kimi-code\bin\kimi.exe`。
+   - 启动参数带 `--rc`（`--remote-control`）：本地 web 就绪后同时注册到 code-rc.kimi.com，手机或另一台电脑可直接接管本机会话。
    - 端口由 `pick_port` 在 spawn 前选定：首选固定端口 58627，被占用时让系统分配空闲端口；选定端口经 `--port` 传入，保证传入端口与实际监听端口一致（stdout 正则解析仅作确认）。已知取舍：kimi web 的主题等页面设置存于 localStorage（按 origin 隔离，端口即隔离边界），回退到非默认端口时这些设置会像首次使用一样重置；登录态与会话数据不受影响。
    - 在 Windows 下设置进程创建标志 `CREATE_NO_WINDOW = 0x08000000`，彻底防止控制台黑窗弹出。
 2. **端口与 Token 正则解析**：

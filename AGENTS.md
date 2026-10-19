@@ -20,7 +20,7 @@
 - **页面刷新快捷键**：通过 `initialization_script` 注入按键监听，支持 F5 / Ctrl+R 重载页面（WebView2 默认不响应浏览器式刷新快捷键），用于长时间会话后手动释放渲染进程内存。
 - **系统托盘驻留**：应用带系统托盘图标，关闭窗口仅隐藏（kimi web 子进程继续运行，会话不丢），托盘菜单"显示窗口"或左键单击托盘图标唤回窗口，只有托盘菜单"退出"才真正结束应用与子进程。
 - **Web 通知唤起**：放行 WebView2 通知权限（`on_permission_request`），页面的 Web Notification API 以原生 toast 正常弹出；注入脚本暴露 kimi web 约定的 `window.kimiDesktop.showWindow` 桥，点击 toast 唤出托盘隐藏的主窗口。
-- **实时用量悬浮窗**：向 kimi web 页面注入统计浮窗，轮询 Rust 侧 `session_stats`（本会话，2s）与 `daily_stats`（今日全部会话汇总，10s）命令，实时显示 TPS（近 5 次均值）、当前会话与今日 token 消耗、缓存命中率；浮窗为跟随页面深浅主题的半透明毛玻璃样式，可拖动（localStorage 记忆位置）、双击折叠、悬停展开明细。
+- **实时用量悬浮窗**：向 kimi web 页面注入统计浮窗，轮询 Rust 侧 `session_stats`（本会话，2s）与 `daily_stats`（今日全部会话汇总，10s）命令，实时显示 TPS（近 10 次均值）、当前会话与今日 token 消耗、缓存命中率；浮窗为跟随页面深浅主题的半透明毛玻璃样式，可拖动（localStorage 记忆位置）、双击折叠、悬停展开明细。
 
 ---
 
@@ -84,9 +84,9 @@ tauri_kimi.exe (Tauri 壳 / Rust 宿主)
 8. **会话用量统计悬浮窗（`session_stats` + `STATS_OVERLAY_JS`）**：
    - 数据源：`~/.kimi-code/sessions/<workDirKey>/<sessionId>/agents/*/wire.jsonl`（含子 agent）中每行一个 JSON 事件；`usage.record` 携带 `inputOther / output / inputCacheRead / inputCacheCreation`，`llm.request` 提供请求发起时间。
    - Rust 侧 `session_stats` 命令：按 sessionId 定位会话目录（注入脚本从页面 URL 正则提取 `session_<uuid>`；提取不到时回退 main wire.jsonl mtime 最新的会话），对每个 wire 文件按 offset 增量解析（末尾半行留下轮），换会话时重置聚合状态。
-   - 统计口径：会话 token = 全部 agent 的 `usage.record` 累加；缓存命中率 = `ΣinputCacheRead / Σ(inputOther+inputCacheRead+inputCacheCreation)`；TPS = 每条 `usage.record` 与前方最近 `llm.request` 配对（间隔 ≤300s 有效），取最近 5 次均值。
+   - 统计口径：会话 token = 全部 agent 的 `usage.record` 累加；缓存命中率 = `ΣinputCacheRead / Σ(inputOther+inputCacheRead+inputCacheCreation)`；TPS = 每条 `usage.record` 与前方最近 `llm.request` 配对（间隔 ≤300s 有效），取最近 10 次均值。
    - Rust 侧 `daily_stats` 命令（async，避免首次回填阻塞主线程）：聚合本地今日全部会话的 `usage.record`；按事件自带 epoch 毫秒时间戳直接分桶到本地日期（时区换算用 `time` crate 的 `local-offset`，失败回退 UTC），天然避免跨天会话重复计算；mtime 早于今日 0 点的文件跳过（append-only），其余按 offset 增量解析，跨天时整体重置。
-   - 注入脚本 `STATS_OVERLAY_JS`：仅在 127.0.0.1/localhost 页面启用，会话统计 2s 一轮、今日汇总 10s 一轮，渲染可拖动的半透明毛玻璃浮窗（深浅色主题通过 documentElement 属性 + `prefers-color-scheme` 双通道跟随），位置/折叠/锁定状态存 localStorage；双击折叠为小圆点，悬停展开与横条同宽的明细面板（分「本会话」「今日（全部会话）」两区，面板内 📌 按钮锁定常驻，未锁定时鼠标离开自动收起），空闲 30s TPS 显示 `--`。
+   - 注入脚本 `STATS_OVERLAY_JS`：仅在 127.0.0.1/localhost 页面启用，会话统计 2s 一轮、今日汇总 10s 一轮，渲染可拖动的半透明毛玻璃浮窗（深浅色主题通过 documentElement 属性 + `prefers-color-scheme` 双通道跟随），位置/折叠/锁定状态存 localStorage；双击折叠为小圆点，悬停展开与横条同宽的明细面板（分「本会话」「今日（全部会话）」两区，面板内 📌 按钮锁定常驻，未锁定时鼠标离开自动收起）；横条 TPS 空闲时保留最后一次统计值，不退化为 `--`（仅首次请求前无数据显示 `--`）。
 ---
 
 ## 3. 技术栈与环境依赖 (Technology Stack)

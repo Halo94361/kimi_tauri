@@ -243,9 +243,8 @@ const STATS_OVERLAY_JS: &str = r##"
     if (!sFound && !dFound) { root.style.display = "none"; return; }
     root.style.display = "block";
     if (sFound) {
-      // 空闲 30s 后 TPS 显示 --，避免残留旧值误导
-      var idle = !d.last_record_time || (Date.now() - d.last_record_time > 30000);
-      var tps = (!d.has_tps || idle) ? "--" : d.tps_avg.toFixed(1);
+      // 空闲后保留最后一次统计值，避免横条退化成 -- 丢失可读信息
+      var tps = d.has_tps ? d.tps_avg.toFixed(1) : "--";
       bar.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
         " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
     } else {
@@ -256,7 +255,7 @@ const STATS_OVERLAY_JS: &str = r##"
     var html = "";
     if (sFound) {
       html +=
-        row("TPS 均值（近5次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
+        row("TPS 均值（近10次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
         row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
         row("输入合计", fmt(d.input_total)) +
         row("缓存读", fmt(d.cache_read)) +
@@ -844,7 +843,7 @@ fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
                     if (1..=300_000).contains(&dur_ms) {
                         agg.recent_tps
                             .push_back(output as f64 / (dur_ms as f64 / 1000.0));
-                        if agg.recent_tps.len() > 5 {
+                        if agg.recent_tps.len() > 10 {
                             agg.recent_tps.pop_front();
                         }
                     }

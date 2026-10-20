@@ -4,11 +4,10 @@
   <meta charset="UTF-8" />
   <title>Kimi Code - 用量统计</title>
   <style>
-    /* 更纱黑体等宽子集（仅收录统计窗用到的字符，约 10KB）：
-       随 ui 目录一起打进二进制，不依赖系统是否安装字体 */
+    /* 更纱黑体等宽子集：与其它自绘页面共用，覆盖 ASCII + 中文常用字 */
     @font-face {
-      font-family: "SarasaStats";
-      src: url("fonts/SarasaMonoSC-Stats.woff2") format("woff2");
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
       font-weight: normal;
       font-style: normal;
       font-display: block;
@@ -39,7 +38,7 @@
       background: var(--page-bg);
       color: var(--fg);
       /* 等宽字体让 TPS / token 数字在固定宽度内保持稳定；emoji 回退到系统字体 */
-      font: 12px/1.5 "SarasaStats", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
+      font: 12px/1.5 "SarasaMonoSC", "Sarasa Mono SC", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
       user-select: none;
       -webkit-user-select: none;
     }

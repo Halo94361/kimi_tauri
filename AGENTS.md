@@ -8,6 +8,7 @@
 - **单窗口多 WebView**：裸窗口 + 4 个子 WebView（`tabbar` / `local` / `remote` / `stats`）。本地与远端 `https://code-rc.kimi.com/` 同时存活，切换只改可见性。
 - **统计浮窗 `stats`**：独立子 WebView（`ui/stats.html`），固定逻辑宽 300，几何与拖动全部由 Rust 管理。拖入顶部 36px 选项卡栏带内实时吸附为栏右侧信息条，拖出恢复悬浮；吸附/悬浮位置、折叠状态存页面 localStorage，经 `stats_restore` 恢复。`stats` 在内容 WebView 之后创建，wry 建子窗口时置顶，后续 `set_position`/`set_size` 带 `SWP_NOZORDER`，因此始终浮在最上层。拖动用 Rust 轮询 `GetCursorPos` + `GetAsyncKeyState(VK_LBUTTON)`，不依赖跨 WebView 的 pointer capture；拖动结束把焦点还给活动内容 WebView。
 - **统计浮窗主题**：跨 WebView 无法使用 `backdrop-filter`，`THEME_SAMPLE_JS` 额外上报页面背景色（`report_theme` 的 `bg`），浮窗以同色作基底消除圆角色差；深浅色与背景色经 `page-theme` 事件下发。
+- **统一等宽字体**：壳内自绘页面（`tabbar` / 启动页 / 错误页 / `stats`）统一用更纱黑体等宽子集 `ui/fonts/SarasaMonoSC-UI.woff2`（family `SarasaMonoSC`），随 `ui` 目录打进二进制，不依赖系统是否安装字体；kimi web 内容页不注入此字体。子集由 `scripts/gen_font_subset.py` 生成，新增页面文案后需重新生成。
 - **子进程直管**：Rust 直接 spawn `kimi web --rc --no-open --port <port>`，Windows 下设置 `CREATE_NO_WINDOW`，避免控制台黑窗；`--rc` 同时把本机会话注册到远端，手机或另一台电脑可接管。
 - **端口选择**：`pick_port` 首选 58627，被占用时改用系统空闲端口。注意 localStorage 按 origin 隔离，回退端口会让主题等页面设置重置（登录态与会话数据不受影响）。
 - **就绪探测**：读 stdout 正则解析端口与 token，30s 看门狗兜底；随后导航到 `http://127.0.0.1:<port>/#token=<token>`，并持续清空 stdout 防止管道写满。

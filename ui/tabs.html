@@ -4,6 +4,14 @@
   <meta charset="UTF-8" />
   <title>Kimi Code - 选项卡</title>
   <style>
+    /* 更纱黑体等宽子集：随 ui 目录一起打进二进制，不依赖系统是否安装字体 */
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }
     /* 深浅色双主题：默认深色，prefers-color-scheme: light 切浅色（首报前的兜底）；
        收到 Rust 转发的页面主题采样结果后由 data-theme 属性精确覆盖 */
     :root {
@@ -42,7 +50,7 @@
       height: 100%;
       overflow: hidden;
       background: var(--bg);
-      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-family: "SarasaMonoSC", "Sarasa Mono SC", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
       user-select: none;
     }
     .bar {

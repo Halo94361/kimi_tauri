@@ -4,12 +4,20 @@
   <meta charset="UTF-8" />
   <title>Kimi Code</title>
   <style>
+    /* 更纱黑体等宽子集：随 ui 目录一起打进二进制，不依赖系统是否安装字体 */
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }
     html, body {
       margin: 0;
       height: 100%;
       background: #1a1a1e;
       color: #d4d4d8;
-      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-family: "SarasaMonoSC", "Sarasa Mono SC", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
       display: flex;
       align-items: center;
       justify-content: center;

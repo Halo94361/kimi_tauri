@@ -3,5 +3,19 @@
   "identifier": "default",
   "description": "Default capability set for the main window",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default", "allow-last-error", "allow-restart-server", "allow-switch-tab", "allow-report-theme"]
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "allow-last-error",
+    "allow-restart-server",
+    "allow-switch-tab",
+    "allow-report-theme",
+    "allow-session-stats",
+    "allow-daily-stats",
+    "allow-stats-restore",
+    "allow-stats-set-size",
+    "allow-stats-set-visible",
+    "allow-stats-focus-content",
+    "allow-stats-drag-start"
+  ]
 }

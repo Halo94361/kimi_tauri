@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kimi Code - 用量统计</title>
+  <style>
+    /* 更纱黑体等宽子集（仅收录统计窗用到的字符，约 10KB）：
+       随 ui 目录一起打进二进制，不依赖系统是否安装字体 */
+    @font-face {
+      font-family: "SarasaStats";
+      src: url("fonts/SarasaMonoSC-Stats.woff2") format("woff2");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }
+    /* 独立子 WebView：宽度固定，高度随内容变化由 Rust 调整；
+       页面底色取内容页采样色，保证圆角外沿与背后页面一致 */
+    :root {
+      --page-bg: #1a1a1e;
+      --panel: rgba(28, 28, 30, 0.92);
+      --fg: rgba(255, 255, 255, 0.92);
+      --muted: rgba(255, 255, 255, 0.55);
+      --border: rgba(255, 255, 255, 0.18);
+      --divider: rgba(255, 255, 255, 0.08);
+      --tabbar-bg: #1a1a1e;
+    }
+    body.light {
+      --page-bg: #ffffff;
+      --panel: rgba(255, 255, 255, 0.92);
+      --fg: rgba(0, 0, 0, 0.85);
+      --muted: rgba(0, 0, 0, 0.5);
+      --border: rgba(0, 0, 0, 0.12);
+      --divider: rgba(0, 0, 0, 0.08);
+      --tabbar-bg: #ffffff;
+    }
+    html, body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--page-bg);
+      color: var(--fg);
+      /* 等宽字体让 TPS / token 数字在固定宽度内保持稳定；emoji 回退到系统字体 */
+      font: 12px/1.5 "SarasaStats", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #root {
+      position: relative;
+      width: 300px;
+      touch-action: none;
+    }
+    #bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 30px;
+      box-sizing: border-box;
+      padding: 0 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      white-space: nowrap;
+      cursor: move;
+    }
+    #barText {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    body.docked #bar {
+      height: 36px;
+      padding: 0 8px;
+      border: 0;
+      border-left: 1px solid var(--divider);
+      border-bottom: 1px solid var(--divider);
+      border-radius: 0;
+      background: var(--tabbar-bg);
+    }
+    #dot {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      background: var(--panel);
+      font-size: 16px;
+      cursor: move;
+    }
+    body.folded #bar { display: none; }
+    body.folded #dot { display: flex; }
+    /* 吸附态折叠成圆点时，底色应与选项卡栏一致，而不是内容页 */
+    body.docked.folded { background: var(--tabbar-bg); }
+    #detail {
+      display: none;
+      box-sizing: border-box;
+      width: 300px;
+      margin-top: 6px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      overflow-y: auto;
+      cursor: default;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      white-space: nowrap;
+    }
+    .row > span:first-child {
+      flex: none;
+      color: var(--muted);
+    }
+    .row > span:last-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: right;
+    }
+    .head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+    .head > span:first-child { color: var(--muted); }
+    .section {
+      margin: 6px 0 2px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(128, 128, 128, 0.35);
+      color: var(--muted);
+    }
+    #pin {
+      cursor: pointer;
+      opacity: 0.35;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div id="bar"><span id="barText"></span></div>
+    <div id="dot">⚡</div>
+    <div id="detail">
+      <div class="head"><span>本会话</span><span id="pin" title="锁定 / 自动收起">📌</span></div>
+      <div id="detailBody"></div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const invoke = window.__TAURI__.core.invoke;
+      const listen = window.__TAURI__.event.listen;
+      const POS_KEY = "kimiStatsGeom2", FOLD_KEY = "kimiStatsFold2", PIN_KEY = "kimiStatsPin2";
+      const FULL_W = 300, BAR_H = 30, DOCK_H = 36, FOLDED = 36;
+
+      const root = document.getElementById("root");
+      const bar = document.getElementById("bar");
+      const barText = document.getElementById("barText");
+      const dot = document.getElementById("dot");
+      const detail = document.getElementById("detail");
+      const detailBody = document.getElementById("detailBody");
+      const pinBtn = document.getElementById("pin");
+
+      let docked = false;
+      let folded = localStorage.getItem(FOLD_KEY) === "1";
+      let pinned = localStorage.getItem(PIN_KEY) === "1";
+      let dragging = false;
+      let visible = false;
+      let open = false;
+      let lastData = null, lastDaily = null;
+      let lastW = 0, lastH = 0;
+      let appliedH = 0;
+      let sizePending = false;
+
+      function onKimiData() {
+        return (lastData && lastData.found) || (lastDaily && lastDaily.found);
+      }
+
+      function setVisible(v) {
+        if (visible === v) return;
+        visible = v;
+        invoke("stats_set_visible", { visible: v }).catch(function () {});
+      }
+
+      /* 内容尺寸上报：宽度固定，高度按「横条 + 6px 间距 + 明细」自然高度计算；
+         测量前先解除 max-height 约束，避免窗口变矮后越测越小 */
+      function requestSize(force) {
+        if (dragging || sizePending) return;
+        sizePending = true;
+        requestAnimationFrame(function () {
+          sizePending = false;
+          if (dragging) return;
+          detail.style.maxHeight = "";
+          var w = folded ? FOLDED : FULL_W;
+          var h = Math.ceil(root.getBoundingClientRect().height);
+          if (!force && w === lastW && h === lastH) return;
+          lastW = w; lastH = h;
+          invoke("stats_set_size", { width: w, height: h }).catch(function () {});
+        });
+      }
+
+      function setOpen(v) {
+        open = !!(v && onKimiData() && !folded);
+        detail.style.display = open ? "block" : "none";
+        if (!open) detail.style.maxHeight = "";
+        requestSize();
+      }
+
+      function applyPin() {
+        pinBtn.style.opacity = pinned ? "1" : "0.35";
+        if (pinned) setOpen(true);
+      }
+
+      function applyFold() {
+        document.body.classList.toggle("folded", folded);
+        localStorage.setItem(FOLD_KEY, folded ? "1" : "0");
+        if (folded) {
+          open = false;
+          detail.style.display = "none";
+        } else if (pinned) {
+          setOpen(true);
+        }
+        requestSize();
+      }
+
+      function toggleFold() {
+        folded = !folded;
+        applyFold();
+      }
+
+      /* ---------- 拖动：只上报 pointerdown，实际移动由 Rust 轮询光标完成 ---------- */
+      function bindDrag(el) {
+        el.addEventListener("pointerdown", function (e) {
+          if (e.button !== 0) return;
+          dragging = true;
+          setOpen(false);
+          invoke("stats_drag_start").catch(function () {});
+        });
+      }
+      bindDrag(bar);
+      bindDrag(dot);
+
+      document.addEventListener("pointerup", function () {
+        if (dragging) {
+          dragging = false;
+          requestSize();
+        }
+        // 点击统计浮窗会夺走焦点，交互结束后还给内容页，保证可直接继续输入
+        setTimeout(function () {
+          invoke("stats_focus_content").catch(function () {});
+        }, 0);
+      });
+
+      document.addEventListener("dblclick", function (e) {
+        if (dragging || detail.contains(e.target) || pinBtn.contains(e.target)) return;
+        toggleFold();
+      });
+
+      pinBtn.addEventListener("click", function () {
+        pinned = !pinned;
+        localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
+        applyPin();
+      });
+
+      /* 从 30/36px 横条展开时，WebView 变高需要一次 IPC + 原生 resize，
+         期间指针可能短暂离开原区域；给收起留一点宽限，避免展开失败 */
+      var closeTimer = 0;
+      root.addEventListener("mouseenter", function () {
+        clearTimeout(closeTimer);
+        if (!dragging && !folded && onKimiData()) setOpen(true);
+      });
+      root.addEventListener("mouseleave", function () {
+        if (pinned || dragging) return;
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(function () { setOpen(false); }, 160);
+      });
+
+      /* ---------- 数据渲染 ---------- */
+      function fmt(n) {
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+        if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+        return String(n);
+      }
+      function row(k, v) {
+        return '<div class="row"><span>' + k + "</span><span>" + v + "</span></div>";
+      }
+      function render() {
+        var d = lastData, daily = lastDaily;
+        var sFound = d && d.found, dFound = daily && daily.found;
+        if (!sFound && !dFound) {
+          setVisible(false);
+          return;
+        }
+        setVisible(true);
+        if (sFound) {
+          // 空闲后保留最后一次统计值，避免横条退化成 -- 丢失可读信息
+          var tps = d.has_tps ? d.tps_avg.toFixed(1) : "--";
+          barText.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
+            " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
+        } else {
+          barText.textContent = "⚡ 今日 ↑" + fmt(daily.input_total) + " ↓" + fmt(daily.output_total) +
+            " · 缓存 " + daily.cache_hit_rate.toFixed(0) + "%";
+        }
+        var html = "";
+        if (sFound) {
+          html +=
+            row("TPS 均值（近10次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
+            row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
+            row("输入合计", fmt(d.input_total)) +
+            row("缓存读", fmt(d.cache_read)) +
+            row("输出合计", fmt(d.output_total)) +
+            row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
+            row("会话", String(d.session_id || "").slice(0, 24));
+        }
+        html += '<div class="section">今日（全部会话）</div>';
+        if (dFound) {
+          html +=
+            row("输入合计", fmt(daily.input_total)) +
+            row("缓存读", fmt(daily.cache_read)) +
+            row("输出合计", fmt(daily.output_total)) +
+            row("缓存命中率", daily.cache_hit_rate.toFixed(1) + "%");
+        } else {
+          html += '<div style="opacity:0.5">暂无数据</div>';
+        }
+        detailBody.innerHTML = html;
+        if (pinned) setOpen(true);
+        requestSize();
+      }
+
+      function tickSession() {
+        invoke("session_stats")
+          .then(function (d) { lastData = d; render(); })
+          .catch(function () { lastData = null; render(); });
+      }
+      function tickDaily() {
+        invoke("daily_stats")
+          .then(function (d) { lastDaily = d; render(); })
+          .catch(function () { lastDaily = null; render(); });
+      }
+
+      /* ---------- 主题 ---------- */
+      function applyTheme(p) {
+        var dark = !p || p.dark !== false;
+        document.body.classList.toggle("light", !dark);
+        var bg = (p && p.bg) || (dark ? "#1a1a1e" : "#ffffff");
+        document.documentElement.style.setProperty("--page-bg", bg);
+      }
+      applyTheme(null);
+      // event.listen 是异步注册的；先收集 Promise，等全部注册完成再调
+      // stats_restore，避免 Rust 立刻回发的主题/模式事件丢失
+      var listens = [];
+      listens.push(listen("page-theme", function (e) { applyTheme(e.payload); }));
+
+      /* ---------- Rust 侧状态同步 ---------- */
+      listens.push(listen("stats-mode", function (e) {
+        docked = !!(e.payload && e.payload.docked);
+        document.body.classList.toggle("docked", docked);
+        if (!dragging) {
+          open = false;
+          detail.style.display = "none";
+          requestSize();
+        }
+      }));
+      listens.push(listen("stats-applied", function (e) {
+        appliedH = (e.payload && e.payload.height) || 0;
+        if (!open) {
+          detail.style.maxHeight = "";
+          return;
+        }
+        var head = docked ? DOCK_H : BAR_H;
+        var avail = appliedH - head - 6;
+        detail.style.maxHeight = Math.max(40, avail) + "px";
+      }));
+      listens.push(listen("stats-drop", function (e) {
+        var p = e.payload || {};
+        docked = !!p.docked;
+        document.body.classList.toggle("docked", docked);
+        localStorage.setItem(POS_KEY, JSON.stringify({ docked: docked, x: p.x, y: p.y }));
+      }));
+      listens.push(listen("stats-drag-end", function () {
+        dragging = false;
+        requestSize();
+      }));
+      listens.push(listen("stats-geom", function () {
+        // 窗口尺寸变化后 Rust 会重新钳制高度，强制重报一次自然高度，
+        // 窗口变回大尺寸时才能恢复展开面板
+        requestSize(true);
+      }));
+
+      /* ---------- 启动：监听就绪后恢复几何，等首个数据到达再显示 ---------- */
+      function restoreGeometry() {
+        var saved = null;
+        try { saved = JSON.parse(localStorage.getItem(POS_KEY) || "null"); } catch (e) {}
+        docked = !!(saved && saved.docked);
+        document.body.classList.toggle("docked", docked);
+        document.body.classList.toggle("folded", folded);
+        invoke("stats_restore", {
+          docked: docked,
+          folded: folded,
+          x: saved && typeof saved.x === "number" ? saved.x : null,
+          y: saved && typeof saved.y === "number" ? saved.y : null
+        }).catch(function () {});
+      }
+      Promise.all(listens).catch(function () {}).then(function () {
+        restoreGeometry();
+        tickSession();
+        tickDaily();
+        setInterval(tickSession, 2000);
+        setInterval(tickDaily, 10000);
+      });
+    })();
+  </script>
+</body>
+</html>

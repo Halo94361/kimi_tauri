@@ -20,17 +20,28 @@ const REMOTE_URL: &str = "https://code-rc.kimi.com/";
 const TABBAR_HEIGHT: f64 = 36.0;
 /// 活动页面主题采样周期：eval 一段只读脚本的开销可忽略，200ms 足够跟手
 const THEME_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// 统计浮窗（独立子 WebView）的固定逻辑宽度：内容变化不再改变宽度与位置
+const STATS_WIDTH: f64 = 300.0;
+/// 悬浮态横条高度
+const STATS_BAR_HEIGHT: f64 = 30.0;
+/// 折叠态圆点尺寸
+const STATS_FOLDED_SIZE: f64 = 36.0;
+/// 吸附态与窗口右边缘的间距（与选项卡栏的 8px padding 对齐）
+const STATS_DOCK_MARGIN: f64 = 8.0;
+/// 拖动循环的轮询间隔：约 120Hz，保证浮窗跟手
+const STATS_DRAG_INTERVAL: Duration = Duration::from_millis(8);
 
 /// 主题采样脚本（由 Rust 定时 eval 进当前活动的内容 WebView）：
 /// 依次检查 body / html / body 首子元素的计算背景色，取第一个非透明色
-/// 按 Rec.601 亮度判断深浅；全部透明时回退到系统主题。
-/// 结果经 report_theme 命令上报，Rust 侧去重后转发给 tabbar
+/// 按 Rec.601 亮度判断深浅，同时把该颜色上报给统计浮窗做底色
+/// （跨 WebView 无法毛玻璃，只能靠同色基底消除圆角处的色差）；
+/// 全部透明时回退到系统主题。结果经 report_theme 上报，Rust 侧去重后转发
 const THEME_SAMPLE_JS: &str = r#"(function () {
   try {
     var T = window.__TAURI__; if (!T) return;
     var els = [document.body, document.documentElement];
     if (document.body && document.body.firstElementChild) els.push(document.body.firstElementChild);
-    var dark = null;
+    var dark = null, bg = null;
     for (var i = 0; i < els.length; i++) {
       if (!els[i]) continue;
       var c = getComputedStyle(els[i]).backgroundColor;
@@ -39,10 +50,11 @@ const THEME_SAMPLE_JS: &str = r#"(function () {
       var a = m[4] === undefined ? 1 : parseFloat(m[4]);
       if (a < 0.5) continue;
       dark = (0.299 * m[1] + 0.587 * m[2] + 0.114 * m[3]) < 128;
+      bg = "rgb(" + m[1] + "," + m[2] + "," + m[3] + ")";
       break;
     }
     if (dark === null) dark = matchMedia("(prefers-color-scheme: dark)").matches;
-    T.core.invoke("report_theme", { dark: dark });
+    T.core.invoke("report_theme", { dark: dark, bg: bg });
   } catch (e) {}
 })();"#;
 
@@ -72,237 +84,25 @@ const REFRESH_BRIDGE_JS: &str = r#"window.addEventListener("keydown", (e) => {
     };
 })();"#;
 
-/// 注入 kimi web 页面的用量统计悬浮窗：
-/// 每 2s 轮询 session_stats（本会话）与 daily_stats（今日全部会话）命令，
-/// 渲染可拖动、跟随页面深浅主题的半透明毛玻璃浮窗（位置与折叠状态存
-/// localStorage），明细面板分「本会话」「今日（全部会话）」两区；
-/// 仅在 127.0.0.1/localhost 的 kimi web 页面启用，壳内建 index/error 页不显示
-const STATS_OVERLAY_JS: &str = r##"
-(function () {
+/// 注入本地内容 WebView 的会话监听脚本：kimi web 是 SPA，会话切换只改
+/// location（hash / pushState），这里每秒比对一次 URL 中的 session_<uuid>，
+/// 变化时上报 Rust，供统计浮窗（独立子 WebView）查询对应会话的用量
+const SESSION_REPORTER_JS: &str = r#"(function () {
   if (!window.__TAURI__) return;
-  var invoke = window.__TAURI__.core.invoke;
-  var POS_KEY = "kimiStatsPos", FOLD_KEY = "kimiStatsFold", PIN_KEY = "kimiStatsPin";
-  var root = null, bar = null, dot = null, detail = null, detailBody = null, pinBtn = null;
-  var folded = localStorage.getItem(FOLD_KEY) === "1";
-  var pinned = localStorage.getItem(PIN_KEY) === "1";
-  var lastData = null, lastDaily = null;
-
-  function hasData() {
-    return (lastData && lastData.found) || (lastDaily && lastDaily.found);
-  }
-
-  function onKimiWeb() {
-    return location.hostname === "127.0.0.1" || location.hostname === "localhost";
-  }
-  function isDark() {
-    var de = document.documentElement;
-    var s = ((de.getAttribute("data-color-scheme") || "") + " " +
-      (de.getAttribute("data-theme") || "") + " " + de.className).toLowerCase();
-    if (s.indexOf("dark") >= 0) return true;
-    if (s.indexOf("light") >= 0) return false;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
-  }
-  function applyTheme() {
-    if (!root) return;
-    var t = isDark() ? {
-      bg: "rgba(28,28,30,0.72)", fg: "rgba(255,255,255,0.92)",
-      border: "rgba(255,255,255,0.18)", shadow: "0 2px 12px rgba(0,0,0,0.4)"
-    } : {
-      bg: "rgba(255,255,255,0.72)", fg: "rgba(0,0,0,0.85)",
-      border: "rgba(0,0,0,0.12)", shadow: "0 2px 12px rgba(0,0,0,0.12)"
-    };
-    [bar, detail, dot].forEach(function (el) {
-      // 用 backgroundColor/borderColor 而非 shorthand，避免重置 detail 的
-      // background-clip 与 6px 透明上边框（鼠标命中桥）
-      el.style.backgroundColor = t.bg; el.style.color = t.fg;
-      el.style.borderColor = t.border; el.style.boxShadow = t.shadow;
-    });
-    detail.style.borderTopColor = "transparent";
-  }
-  function applyFold() {
-    bar.style.display = folded ? "none" : "flex";
-    dot.style.display = folded ? "flex" : "none";
-    // 锁定状态下详情面板常驻；折叠成小圆点时强制收起
-    detail.style.display = (!folded && pinned && hasData()) ? "block" : "none";
-  }
-  function applyPin() {
-    pinBtn.style.opacity = pinned ? "1" : "0.35";
-    applyFold();
-  }
-  function enableDrag() {
-    var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false, moved = false;
-    function down(e) {
-      dragging = true; moved = false;
-      sx = e.clientX; sy = e.clientY;
-      var r = root.getBoundingClientRect();
-      ox = r.left; oy = r.top;
-      document.addEventListener("pointermove", move);
-      document.addEventListener("pointerup", up);
-    }
-    function move(e) {
-      if (!dragging) return;
-      var dx = e.clientX - sx, dy = e.clientY - sy;
-      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-      if (!moved) return;
-      var left = Math.min(Math.max(0, ox + dx), window.innerWidth - root.offsetWidth);
-      var top = Math.min(Math.max(0, oy + dy), window.innerHeight - root.offsetHeight);
-      root.style.left = left + "px"; root.style.top = top + "px";
-      root.style.right = "auto";
-      localStorage.setItem(POS_KEY, JSON.stringify({ left: left, top: top }));
-    }
-    function up() {
-      dragging = false;
-      document.removeEventListener("pointermove", move);
-      document.removeEventListener("pointerup", up);
-    }
-    bar.addEventListener("pointerdown", down);
-    dot.addEventListener("pointerdown", down);
-  }
-  function ensureRoot() {
-    if (root || !document.body) return;
-    root = document.createElement("div");
-    root.id = "kimi-stats-overlay";
-    var s = root.style;
-    s.position = "fixed"; s.zIndex = "2147483000";
-    s.font = "12px/1.5 system-ui, sans-serif";
-    s.userSelect = "none"; s.webkitUserSelect = "none";
-    s.display = "none";
-    var pos = null;
-    try { pos = JSON.parse(localStorage.getItem(POS_KEY) || "null"); } catch (e) {}
-    if (pos && typeof pos.left === "number" && typeof pos.top === "number") {
-      s.left = pos.left + "px"; s.top = pos.top + "px";
-    } else {
-      s.right = "12px"; s.top = "12px";
-    }
-    bar = document.createElement("div");
-    bar.style.cssText = "display:flex;align-items:center;justify-content:center;min-width:230px;padding:5px 12px;" +
-      "border:1px solid transparent;border-radius:10px;" +
-      "backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);cursor:move;white-space:nowrap";
-    dot = document.createElement("div");
-    dot.style.cssText = "display:none;align-items:center;justify-content:center;width:36px;height:36px;" +
-      "border:1px solid transparent;border-radius:50%;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);cursor:move;font-size:16px";
-    dot.textContent = "⚡";
-    detail = document.createElement("div");
-    // top:100% + 透明上边框：保留 6px 视觉间距，同时让命中区域与横条连成一片，
-    // 鼠标才能从横条移到面板上（否则会触发 mouseleave 自动收起）；
-    // background-clip:padding-box 让毛玻璃背景不渗进透明边框区
-    detail.style.cssText = "display:none;position:absolute;top:100%;left:0;right:0;box-sizing:border-box;" +
-      "border:1px solid transparent;border-top:6px solid transparent;background-clip:padding-box;" +
-      "padding:8px 12px;border-radius:10px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);cursor:default";
-    // 头部固定（含锁定按钮），内容区由 render 重写，避免每轮重建按钮
-    var head = document.createElement("div");
-    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:2px";
-    var title = document.createElement("span");
-    title.style.opacity = "0.5";
-    title.textContent = "本会话";
-    pinBtn = document.createElement("span");
-    pinBtn.textContent = "📌";
-    pinBtn.title = "锁定 / 自动收起";
-    pinBtn.style.cssText = "cursor:pointer;opacity:0.35";
-    pinBtn.addEventListener("click", function () {
-      pinned = !pinned;
-      localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
-      applyPin();
-    });
-    head.appendChild(title); head.appendChild(pinBtn);
-    detailBody = document.createElement("div");
-    detail.appendChild(head); detail.appendChild(detailBody);
-    root.appendChild(bar); root.appendChild(dot); root.appendChild(detail);
-    document.body.appendChild(root);
-    root.addEventListener("mouseenter", function () {
-      if (!folded && hasData()) detail.style.display = "block";
-    });
-    root.addEventListener("mouseleave", function () { if (!pinned) detail.style.display = "none"; });
-    root.addEventListener("dblclick", function (e) {
-      // 详情面板内的双击（如锁定按钮）不触发折叠切换
-      if (detail.contains(e.target)) return;
-      folded = !folded;
-      localStorage.setItem(FOLD_KEY, folded ? "1" : "0");
-      applyFold();
-    });
-    enableDrag();
-    applyTheme(); applyPin();
-    var mq = window.matchMedia("(prefers-color-scheme: dark)");
-    if (mq.addEventListener) mq.addEventListener("change", applyTheme); else mq.addListener(applyTheme);
-    new MutationObserver(applyTheme).observe(document.documentElement,
-      { attributes: true, attributeFilter: ["class", "data-color-scheme", "data-theme"] });
-  }
-
-  function fmt(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
-    if (n >= 1000) return (n / 1000).toFixed(1) + "K";
-    return String(n);
-  }
-  function row(k, v) {
-    return '<div style="display:flex;justify-content:space-between;gap:16px">' +
-      '<span style="opacity:0.65">' + k + "</span><span>" + v + "</span></div>";
-  }
-  function render() {
-    var d = lastData, daily = lastDaily;
-    var sFound = d && d.found, dFound = daily && daily.found;
-    if (!sFound && !dFound) { root.style.display = "none"; return; }
-    root.style.display = "block";
-    if (sFound) {
-      // 空闲后保留最后一次统计值，避免横条退化成 -- 丢失可读信息
-      var tps = d.has_tps ? d.tps_avg.toFixed(1) : "--";
-      bar.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
-        " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
-    } else {
-      // 会话页尚未产生数据时，横条退化为今日汇总
-      bar.textContent = "⚡ 今日 ↑" + fmt(daily.input_total) + " ↓" + fmt(daily.output_total) +
-        " · 缓存 " + daily.cache_hit_rate.toFixed(0) + "%";
-    }
-    var html = "";
-    if (sFound) {
-      html +=
-        row("TPS 均值（近10次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
-        row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
-        row("输入合计", fmt(d.input_total)) +
-        row("缓存读", fmt(d.cache_read)) +
-        row("输出合计", fmt(d.output_total)) +
-        row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
-        row("会话", String(d.session_id || "").slice(0, 24));
-    }
-    html += '<div style="opacity:0.5;border-top:1px solid rgba(128,128,128,0.35);margin:6px 0 2px;padding-top:4px">今日（全部会话）</div>';
-    if (dFound) {
-      html +=
-        row("输入合计", fmt(daily.input_total)) +
-        row("缓存读", fmt(daily.cache_read)) +
-        row("输出合计", fmt(daily.output_total)) +
-        row("缓存命中率", daily.cache_hit_rate.toFixed(1) + "%");
-    } else {
-      html += '<div style="opacity:0.5">暂无数据</div>';
-    }
-    detailBody.innerHTML = html;
-  }
-  function currentSessionId() {
+  // 只在本地 kimi web 页面启用；壳内建 index/error 页没有会话概念
+  if (location.hostname !== "127.0.0.1" && location.hostname !== "localhost") return;
+  var last = null;
+  function tick() {
     var m = location.href.match(/session_[0-9a-fA-F-]{36}/);
-    return m ? m[0] : null;
+    var id = m ? m[0] : "";
+    if (id !== last) {
+      last = id;
+      window.__TAURI__.core.invoke("report_session", { sessionId: id }).catch(function () {});
+    }
   }
-  // 会话统计 2s 一轮（TPS 需要跟手）；今日汇总 10s 一轮（变化慢，无需高频）
-  function tickSession() {
-    if (!onKimiWeb()) { if (root) root.style.display = "none"; return; }
-    ensureRoot();
-    if (!root) return;
-    invoke("session_stats", { sessionId: currentSessionId() })
-      .then(function (d) { lastData = d; render(); })
-      .catch(function () { lastData = null; render(); });
-  }
-  function tickDaily() {
-    if (!onKimiWeb() || !root) return;
-    invoke("daily_stats")
-      .then(function (d) { lastDaily = d; render(); })
-      .catch(function () { lastDaily = null; render(); });
-  }
-  setInterval(tickSession, 2000);
-  setInterval(tickDaily, 10000);
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", function () { tickSession(); tickDaily(); });
-  } else {
-    tickSession(); tickDaily();
-  }
-})();
-"##;
+  tick();
+  setInterval(tick, 1000);
+})();"#;
 
 /// Windows Job Object：把 kimi.exe 绑定进带 KILL_ON_JOB_CLOSE 的作业，
 /// 使壳进程以任何方式退出（正常关闭、被强杀、崩溃）时，系统都会级联回收
@@ -388,8 +188,40 @@ struct AppState {
     daily: Mutex<DailyStats>,
     /// 当前活动选项卡："local" | "remote"
     active_tab: Mutex<String>,
-    /// 最近一次采样得到的页面主题（true=深色），用于去重后只在变化时通知 tabbar
-    last_theme: Mutex<Option<bool>>,
+    /// 最近一次采样得到的页面主题与背景色，用于去重后通知 tabbar / 统计浮窗
+    last_theme: Mutex<Option<(bool, Option<String>)>>,
+    /// 统计浮窗的几何与状态（由 Rust 统一管理，页面只上报内容尺寸）
+    stats_geom: Mutex<StatsGeom>,
+    /// 拖动循环占用标记，避免重复启动
+    stats_dragging: Mutex<bool>,
+    /// 内容页当前打开的会话 id（由 SESSION_REPORTER_JS 上报）
+    reported_session: Mutex<String>,
+}
+
+/// 统计浮窗几何：悬浮/吸附两种模式共用；坐标为相对主窗口客户区的逻辑像素
+#[derive(Clone)]
+struct StatsGeom {
+    docked: bool,
+    folded: bool,
+    visible: bool,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl Default for StatsGeom {
+    fn default() -> Self {
+        Self {
+            docked: false,
+            folded: false,
+            visible: false,
+            x: 0.0,
+            y: 0.0,
+            w: STATS_WIDTH,
+            h: STATS_BAR_HEIGHT,
+        }
+    }
 }
 
 /// 会话用量统计的增量解析状态：按会话维度聚合该会话所有 agent 的
@@ -551,6 +383,8 @@ fn switch_to_tab(app: &AppHandle, tab: &str) {
 
 fn show_error(app: &AppHandle, msg: &str) {
     *app.state::<AppState>().last_error.lock().unwrap() = msg.to_string();
+    // 服务不可用时统计浮窗没有意义，等下次就绪再显示
+    *app.state::<AppState>().ready.lock().unwrap() = false;
     if let Some(url) = app_page(app, "error.html") {
         navigate_local(app, &url);
     }
@@ -560,12 +394,115 @@ fn show_error(app: &AppHandle, msg: &str) {
     show_main_window(app);
 }
 
+/// 主窗口客户区的逻辑尺寸
+fn window_logical_size(window: &tauri::Window) -> (f64, f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    window
+        .inner_size()
+        .map(|s| (s.width as f64 / scale, s.height as f64 / scale))
+        .unwrap_or((0.0, 0.0))
+}
+
+/// 把统计浮窗几何钳制在窗口内：吸附态右对齐贴顶（展开的明细向下延伸），
+/// 悬浮态保持完整可见且不压住选项卡栏
+fn clamp_stats_geom(g: &mut StatsGeom, win_w: f64, win_h: f64) {
+    g.h = g.h.clamp(1.0, win_h.max(1.0));
+    if g.docked {
+        g.x = (win_w - g.w - STATS_DOCK_MARGIN).max(0.0);
+        g.y = 0.0;
+    } else {
+        g.x = g.x.clamp(0.0, (win_w - g.w).max(0.0));
+        let max_y = (win_h - g.h).max(0.0);
+        let min_y = TABBAR_HEIGHT.min(max_y);
+        g.y = g.y.clamp(min_y, max_y);
+    }
+}
+
+/// 应用统计浮窗几何；位置与尺寸都是相对主窗口客户区的逻辑像素
+fn apply_stats_geom(app: &AppHandle, g: &StatsGeom) {
+    if let Some(wv) = app.get_webview("stats") {
+        let _ = wv.set_position(LogicalPosition::new(g.x, g.y));
+        let _ = wv.set_size(LogicalSize::new(g.w, g.h));
+    }
+}
+
+/// 只移动统计浮窗：拖动过程中尺寸不变，避免每帧重复触发 WebView 重排
+fn move_stats_webview(app: &AppHandle, x: f64, y: f64) {
+    if let Some(wv) = app.get_webview("stats") {
+        let _ = wv.set_position(LogicalPosition::new(x, y));
+    }
+}
+
+/// 通知统计浮窗当前处于吸附还是悬浮
+fn emit_stats_mode(app: &AppHandle, docked: bool) {
+    let _ = app.emit_to("stats", "stats-mode", serde_json::json!({ "docked": docked }));
+}
+
+/// 重发最近一次采样的主题：浮窗 WebView 可能晚于采样就绪，
+/// 轮询去重后不会再发，因此在恢复/显示时补一次
+fn emit_stats_theme(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let last = state.last_theme.lock().unwrap().clone();
+    if let Some((dark, bg)) = last {
+        let _ = app.emit_to(
+            "stats",
+            "page-theme",
+            serde_json::json!({ "dark": dark, "bg": bg }),
+        );
+    }
+}
+
+/// 把键盘焦点还给当前选项卡的内容 WebView：
+/// 点击/拖动统计浮窗会夺走焦点，不回焦会导致聊天输入框无法直接输入
+fn focus_active_content(app: &AppHandle) {
+    let tab = app.state::<AppState>().active_tab.lock().unwrap().clone();
+    let label = if tab == "remote" { "remote" } else { "local" };
+    if let Some(wv) = app.get_webview(label) {
+        let _ = wv.set_focus();
+    }
+}
+
+/// 鼠标位置（物理屏幕像素）
+#[cfg(windows)]
+fn cursor_pos() -> Option<(f64, f64)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut p = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut p) } != 0 {
+        Some((p.x as f64, p.y as f64))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn cursor_pos() -> Option<(f64, f64)> {
+    None
+}
+
+/// 鼠标左键是否仍按下（Rust 侧拖动循环据此判断结束）
+#[cfg(windows)]
+fn left_button_down() -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(not(windows))]
+fn left_button_down() -> bool {
+    false
+}
+
 /// 按窗口逻辑尺寸重排子 WebView：tabbar 置顶 TABBAR_HEIGHT，
-/// 两个内容 WebView 铺满下方（bounds 是物理像素，需除以缩放因子换算）
+/// 两个内容 WebView 铺满下方（bounds 是物理像素，需除以缩放因子换算），
+/// 统计浮窗按当前模式重新钳制位置
 fn layout_webviews(window: &tauri::Window) {
     let Ok(size) = window.inner_size() else {
         return;
     };
+    // 最小化会带出 0x0 的 Resized 事件；此时不能按 0 尺寸钳制浮窗位置
+    if window.is_minimized().unwrap_or(false) || size.width == 0 || size.height == 0 {
+        return;
+    }
     let scale = window.scale_factor().unwrap_or(1.0);
     let w = size.width as f64 / scale;
     let h = size.height as f64 / scale;
@@ -580,6 +517,26 @@ fn layout_webviews(window: &tauri::Window) {
             let _ = wv.set_size(LogicalSize::new(w, content_h));
         }
     }
+
+    let app = window.app_handle();
+    let state = app.state::<AppState>();
+    let g = {
+        let mut g = state.stats_geom.lock().unwrap();
+        clamp_stats_geom(&mut g, w, h);
+        g.clone()
+    };
+    apply_stats_geom(app, &g);
+    let _ = app.emit_to(
+        "stats",
+        "stats-geom",
+        serde_json::json!({ "width": g.w, "height": g.h }),
+    );
+    // 高度可能被窗口尺寸钳制，通知页面按最新可用高度调整明细滚动区
+    let _ = app.emit_to(
+        "stats",
+        "stats-applied",
+        serde_json::json!({ "width": g.w, "height": g.h }),
+    );
 }
 
 /// 真正退出应用：标记 quitting、杀掉 kimi web 子进程并退出事件循环
@@ -734,17 +691,285 @@ fn switch_tab(tab: String, app: AppHandle) -> Result<(), String> {
     }
 }
 
-/// 主题采样脚本（THEME_SAMPLE_JS）的上报入口：
-/// 去重后只在深浅色变化时通知 tabbar 切换配色
+/// 统计浮窗加载完成：应用页面保存的模式与位置（此时仍保持隐藏，
+/// 待首次拿到用量数据后由 stats_set_visible 显示，避免空白横条闪现）
 #[tauri::command]
-fn report_theme(dark: bool, app: AppHandle) {
-    let state = app.state::<AppState>();
-    let mut last = state.last_theme.lock().unwrap();
-    if *last == Some(dark) {
+fn stats_restore(docked: bool, folded: bool, x: Option<f64>, y: Option<f64>, app: AppHandle) {
+    let Some(win) = app.get_window("main") else {
+        return;
+    };
+    let (win_w, win_h) = window_logical_size(&win);
+    if win.is_minimized().unwrap_or(false) || win_w <= 0.0 || win_h <= 0.0 {
         return;
     }
-    *last = Some(dark);
-    let _ = app.emit_to("tabbar", "theme-changed", if dark { "dark" } else { "light" });
+    let state = app.state::<AppState>();
+    let g = {
+        let mut g = state.stats_geom.lock().unwrap();
+        g.docked = docked;
+        g.folded = folded;
+        g.w = if folded { STATS_FOLDED_SIZE } else { STATS_WIDTH };
+        g.h = if folded {
+            STATS_FOLDED_SIZE
+        } else if docked {
+            TABBAR_HEIGHT
+        } else {
+            STATS_BAR_HEIGHT
+        };
+        // 保存的 x 是展开横条的左边缘；折叠态以右边缘对齐，避免圆点跳位
+        g.x = x.unwrap_or(win_w - STATS_WIDTH - 12.0);
+        g.y = y.unwrap_or(TABBAR_HEIGHT + 12.0);
+        if folded && !docked {
+            g.x += STATS_WIDTH - STATS_FOLDED_SIZE;
+        }
+        clamp_stats_geom(&mut g, win_w, win_h);
+        g.clone()
+    };
+    apply_stats_geom(&app, &g);
+    emit_stats_mode(&app, g.docked);
+    emit_stats_theme(&app);
+}
+
+/// 统计浮窗上报内容尺寸（固定宽度 + 按内容变化的高度）；
+/// Rust 负责钳制到窗口内并保持右边缘不因折叠/展开而跳动
+#[tauri::command]
+fn stats_set_size(width: f64, height: f64, app: AppHandle) {
+    let Some(win) = app.get_window("main") else {
+        return;
+    };
+    let (win_w, win_h) = window_logical_size(&win);
+    // 最小化期间不按 0 尺寸钳制，否则恢复后浮窗位置会丢
+    if win.is_minimized().unwrap_or(false) || win_w <= 0.0 || win_h <= 0.0 {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let g = {
+        let mut g = state.stats_geom.lock().unwrap();
+        let folded = width <= STATS_FOLDED_SIZE + 0.5;
+        let old_w = g.w;
+        g.folded = folded;
+        g.w = if folded { STATS_FOLDED_SIZE } else { STATS_WIDTH };
+        g.h = if folded {
+            STATS_FOLDED_SIZE
+        } else if g.docked {
+            height.clamp(TABBAR_HEIGHT, win_h.max(TABBAR_HEIGHT))
+        } else {
+            height.clamp(STATS_BAR_HEIGHT, win_h.max(STATS_BAR_HEIGHT))
+        };
+        if !g.docked && (old_w - g.w).abs() > 0.5 {
+            g.x += old_w - g.w;
+        }
+        clamp_stats_geom(&mut g, win_w, win_h);
+        g.clone()
+    };
+    apply_stats_geom(&app, &g);
+    let _ = app.emit_to(
+        "stats",
+        "stats-applied",
+        serde_json::json!({ "width": g.w, "height": g.h }),
+    );
+}
+
+/// 有数据才显示统计浮窗；隐藏时只 Hide，不改几何
+#[tauri::command]
+fn stats_set_visible(visible: bool, app: AppHandle) {
+    let state = app.state::<AppState>();
+    {
+        let mut g = state.stats_geom.lock().unwrap();
+        if g.visible == visible {
+            return;
+        }
+        g.visible = visible;
+    }
+    if let Some(wv) = app.get_webview("stats") {
+        let _ = if visible { wv.show() } else { wv.hide() };
+    }
+    if visible {
+        let g = state.stats_geom.lock().unwrap().clone();
+        apply_stats_geom(&app, &g);
+        emit_stats_theme(&app);
+    }
+}
+
+/// 点击/拖动统计浮窗后把键盘焦点还给内容页
+#[tauri::command]
+fn stats_focus_content(app: AppHandle) {
+    focus_active_content(&app);
+}
+
+/// 内容页会话切换上报（SESSION_REPORTER_JS）
+#[tauri::command]
+fn report_session(session_id: String, state: tauri::State<AppState>) {
+    let mut cur = state.reported_session.lock().unwrap();
+    if *cur != session_id {
+        *cur = session_id;
+    }
+}
+
+/// 统计浮窗拖动：由 Rust 轮询光标移动子 WebView，避免依赖跨 WebView 的
+/// pointer capture；光标进入顶部选项卡栏带内实时吸附，移出即恢复悬浮
+#[tauri::command]
+fn stats_drag_start(app: AppHandle) {
+    let Some(win) = app.get_window("main") else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    {
+        let mut dragging = state.stats_dragging.lock().unwrap();
+        if *dragging {
+            return;
+        }
+        *dragging = true;
+    }
+    let mut g = state.stats_geom.lock().unwrap().clone();
+    let Some((cx, cy)) = cursor_pos() else {
+        *state.stats_dragging.lock().unwrap() = false;
+        return;
+    };
+    if !g.visible {
+        *state.stats_dragging.lock().unwrap() = false;
+        return;
+    }
+    // 拖动期间固定按横条高度，收起明细，避免高度反复变化
+    g.h = if g.folded {
+        STATS_FOLDED_SIZE
+    } else if g.docked {
+        TABBAR_HEIGHT
+    } else {
+        STATS_BAR_HEIGHT
+    };
+    {
+        let mut st = state.stats_geom.lock().unwrap();
+        st.h = g.h;
+    }
+    apply_stats_geom(&app, &g);
+
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let Ok(inner) = win.inner_position() else {
+        *state.stats_dragging.lock().unwrap() = false;
+        return;
+    };
+    let rel_x = (cx - inner.x as f64) / scale;
+    let rel_y = (cy - inner.y as f64) / scale;
+    let grab_x = rel_x - g.x;
+    let grab_y = rel_y - g.y;
+
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let state = app2.state::<AppState>();
+        let mut cur = g;
+        let mut docked = cur.docked;
+        let mut moved = false;
+
+        loop {
+            std::thread::sleep(STATS_DRAG_INTERVAL);
+            let Some((px, py)) = cursor_pos() else { break };
+            let down = left_button_down();
+            let Ok(inner) = win.inner_position() else { break };
+            let (win_w, win_h) = window_logical_size(&win);
+            let scale = win.scale_factor().unwrap_or(1.0);
+            let rel_x = (px - inner.x as f64) / scale;
+            let rel_y = (py - inner.y as f64) / scale;
+
+            if !moved && ((rel_x - grab_x) - cur.x).abs() + ((rel_y - grab_y) - cur.y).abs() > 3.0
+            {
+                moved = true;
+            }
+            if moved {
+                let in_band = (0.0..=TABBAR_HEIGHT).contains(&rel_y);
+                let mut mode_changed = false;
+                if in_band && !docked {
+                    docked = true;
+                    cur.docked = true;
+                    mode_changed = true;
+                    emit_stats_mode(&app2, true);
+                } else if !in_band && docked {
+                    docked = false;
+                    cur.docked = false;
+                    mode_changed = true;
+                    emit_stats_mode(&app2, false);
+                }
+                // 吸附条与选项卡栏同高；悬浮横条为 30，折叠态为 36 圆点
+                let bar_h = if cur.docked {
+                    TABBAR_HEIGHT
+                } else {
+                    STATS_BAR_HEIGHT
+                };
+                if cur.docked {
+                    cur.x = (win_w - cur.w - STATS_DOCK_MARGIN).max(0.0);
+                    cur.y = 0.0;
+                } else {
+                    cur.x = rel_x - grab_x;
+                    cur.y = (rel_y - grab_y).max(TABBAR_HEIGHT);
+                }
+                cur.h = if cur.folded { STATS_FOLDED_SIZE } else { bar_h };
+                clamp_stats_geom(&mut cur, win_w, win_h);
+                {
+                    // 只同步拖动相关字段，避免覆盖页面在拖动期间上报的宽度/折叠状态
+                    let mut st = state.stats_geom.lock().unwrap();
+                    st.docked = cur.docked;
+                    st.x = cur.x;
+                    st.y = cur.y;
+                    st.h = cur.h;
+                }
+                if mode_changed {
+                    apply_stats_geom(&app2, &cur);
+                } else {
+                    move_stats_webview(&app2, cur.x, cur.y);
+                }
+            }
+            if !down {
+                break;
+            }
+        }
+
+        let final_geom = {
+            // 只落拖动结果；高度/折叠/可见性以页面最后一次上报为准，
+            // 避免拖动结束恰好发生在折叠切换时覆盖页面的尺寸
+            let mut st = state.stats_geom.lock().unwrap();
+            st.docked = cur.docked;
+            st.x = cur.x;
+            st.y = cur.y;
+            st.clone()
+        };
+        apply_stats_geom(&app2, &final_geom);
+        // 持久化用「展开横条左边缘」，折叠态换算回去，避免下次恢复时重复偏移
+        let float_x = if final_geom.folded {
+            final_geom.x - (STATS_WIDTH - STATS_FOLDED_SIZE)
+        } else {
+            final_geom.x
+        };
+        let _ = app2.emit_to(
+            "stats",
+            "stats-drop",
+            serde_json::json!({ "docked": final_geom.docked, "x": float_x, "y": final_geom.y }),
+        );
+        let _ = app2.emit_to("stats", "stats-drag-end", serde_json::json!({}));
+        *state.stats_dragging.lock().unwrap() = false;
+        focus_active_content(&app2);
+    });
+}
+
+/// 主题采样脚本（THEME_SAMPLE_JS）的上报入口：
+/// 深浅色变化时通知 tabbar；深浅色或背景色变化时通知统计浮窗
+#[tauri::command]
+fn report_theme(dark: bool, bg: Option<String>, app: AppHandle) {
+    let state = app.state::<AppState>();
+    let mut last = state.last_theme.lock().unwrap();
+    let dark_changed = last.as_ref().map(|(d, _)| *d) != Some(dark);
+    let next = (dark, bg.clone());
+    if last.as_ref() == Some(&next) {
+        return;
+    }
+    *last = Some(next);
+    drop(last);
+    if dark_changed {
+        let _ = app.emit_to("tabbar", "theme-changed", if dark { "dark" } else { "light" });
+    }
+    let _ = app.emit_to(
+        "stats",
+        "page-theme",
+        serde_json::json!({ "dark": dark, "bg": bg }),
+    );
 }
 
 /// Kimi Code 数据根目录：优先 KIMI_CODE_HOME，默认 ~/.kimi-code
@@ -854,15 +1079,21 @@ fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
     }
 }
 
-/// 返回指定（或当前最活跃）会话的累计用量与实时 TPS，
-/// 供注入 kimi web 页面的统计悬浮窗轮询
+/// 返回指定会话的累计用量与实时 TPS，供统计浮窗轮询；
+/// 未指定时优先使用内容页上报的当前会话，再回退到最活跃会话
 #[tauri::command]
 fn session_stats(session_id: Option<String>, state: tauri::State<AppState>) -> serde_json::Value {
     let not_found = serde_json::json!({ "found": false });
+    // 服务未就绪（启动加载页/错误页）时不展示历史会话的快照
+    if !*state.ready.lock().unwrap() {
+        return not_found;
+    }
     let Some(home) = kimi_code_home() else { return not_found };
+    let reported = state.reported_session.lock().unwrap().clone();
     let dir = session_id
         .as_deref()
         .filter(|s| !s.is_empty())
+        .or_else(|| Some(reported.as_str()).filter(|s| !s.is_empty()))
         .and_then(|s| find_session_dir(&home, s))
         .or_else(|| find_latest_session_dir(&home));
     let Some(dir) = dir else { return not_found };
@@ -978,6 +1209,9 @@ fn consume_wire_today(offset: &mut u64, agg: &mut DailyAgg, path: &Path, day_sta
 #[tauri::command]
 async fn daily_stats(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, ()> {
     let not_found = serde_json::json!({ "found": false });
+    if !*state.ready.lock().unwrap() {
+        return Ok(not_found);
+    }
     let Some(home) = kimi_code_home() else {
         return Ok(not_found);
     };
@@ -1055,7 +1289,13 @@ pub fn run() {
             session_stats,
             daily_stats,
             switch_tab,
-            report_theme
+            report_theme,
+            report_session,
+            stats_restore,
+            stats_set_size,
+            stats_set_visible,
+            stats_focus_content,
+            stats_drag_start
         ])
         .setup(|app| {
             // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
@@ -1105,14 +1345,15 @@ pub fn run() {
                 _ => (1280.0, 800.0),
             };
 
-            // 裸窗口 + 3 个子 WebView：tabbar（顶部选项卡栏）、local（本地 kimi web）、
-            // remote（远端托管服务）；切换选项卡只改可见性，两个会话同时存活
+            // 裸窗口 + 4 个子 WebView：tabbar（顶部选项卡栏）、local（本地 kimi web）、
+            // remote（远端托管服务）、stats（用量统计浮窗）；切换选项卡只改可见性，
+            // 两个会话同时存活，stats 始终置顶
             let mut win_builder = WindowBuilder::new(app, "main")
                 .title("Kimi Code")
                 .inner_size(win_w, win_h)
                 .min_inner_size(720.0, 480.0)
                 .center()
-                // 先隐藏，待三个子 WebView 就位（远端初始隐藏）后再显示，避免闪动
+                // 先隐藏，待四个子 WebView 就位（远端与统计浮窗初始隐藏）后再显示，避免闪动
                 .visible(false);
             if let Some(icon) = app.default_window_icon() {
                 win_builder = win_builder.icon(icon.clone())?;
@@ -1135,8 +1376,8 @@ pub fn run() {
                     .disable_drag_drop_handler()
                     // F5/Ctrl+R 刷新快捷键 + window.kimiDesktop 桌面桥
                     .initialization_script(REFRESH_BRIDGE_JS)
-                    // 注入用量统计悬浮窗：轮询 session_stats，实时显示 TPS / 会话 token / 缓存命中率
-                    .initialization_script(STATS_OVERLAY_JS)
+                    // 上报当前会话 id，供独立的统计浮窗查询对应会话
+                    .initialization_script(SESSION_REPORTER_JS)
                     // 放行 Web 通知权限：WebView2 对未应答的权限请求默认拒绝，
                     // 页面的 Web Notification API 会因此被静默吞掉
                     .on_permission_request(|_, kind| match kind {
@@ -1194,6 +1435,25 @@ pub fn run() {
             )?;
             // 初始落在"本地"选项卡，远端 WebView 后台预加载但不可见
             let _ = remote.hide();
+
+            // 统计浮窗：独立子 WebView，创建顺序在内容 WebView 之后，
+            // wry 创建子窗口时置顶（HWND_TOP），因此始终浮在页面与选项卡栏之上；
+            // 初始隐藏，待页面恢复几何并拿到用量数据后再显示
+            let stats_pos = LogicalPosition::new(win_w - STATS_WIDTH - 12.0, TABBAR_HEIGHT + 12.0);
+            let stats = win.add_child(
+                WebviewBuilder::new("stats", WebviewUrl::App("stats.html".into()))
+                    // 不在创建时抢焦点，键盘输入应留在内容页
+                    .focused(false),
+                stats_pos,
+                LogicalSize::new(STATS_WIDTH, STATS_BAR_HEIGHT),
+            )?;
+            let _ = stats.hide();
+            {
+                let state = app.state::<AppState>();
+                let mut g = state.stats_geom.lock().unwrap();
+                g.x = win_w - STATS_WIDTH - 12.0;
+                g.y = TABBAR_HEIGHT + 12.0;
+            }
 
             // 记录应用页面源（如 http://tauri.localhost/），供错误页/加载页导航使用
             if let Ok(mut u) = tabbar.url() {

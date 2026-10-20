@@ -357,6 +357,12 @@
           "markdownDescription": "Enables the last_error command without any pre-configured scope."
         },
         {
+          "description": "Enables the report_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-report-session",
+          "markdownDescription": "Enables the report_session command without any pre-configured scope."
+        },
+        {
           "description": "Enables the report_theme command without any pre-configured scope.",
           "type": "string",
           "const": "allow-report-theme",
@@ -381,6 +387,36 @@
           "markdownDescription": "Enables the show_window command without any pre-configured scope."
         },
         {
+          "description": "Enables the stats_drag_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stats-drag-start",
+          "markdownDescription": "Enables the stats_drag_start command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stats_focus_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stats-focus-content",
+          "markdownDescription": "Enables the stats_focus_content command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stats_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stats-restore",
+          "markdownDescription": "Enables the stats_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stats_set_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stats-set-size",
+          "markdownDescription": "Enables the stats_set_size command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stats_set_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stats-set-visible",
+          "markdownDescription": "Enables the stats_set_visible command without any pre-configured scope."
+        },
+        {
           "description": "Enables the switch_tab command without any pre-configured scope.",
           "type": "string",
           "const": "allow-switch-tab",
@@ -397,6 +433,12 @@
           "type": "string",
           "const": "deny-last-error",
           "markdownDescription": "Denies the last_error command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the report_session command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-report-session",
+          "markdownDescription": "Denies the report_session command without any pre-configured scope."
         },
         {
           "description": "Denies the report_theme command without any pre-configured scope.",
@@ -421,6 +463,36 @@
           "type": "string",
           "const": "deny-show-window",
           "markdownDescription": "Denies the show_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stats_drag_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stats-drag-start",
+          "markdownDescription": "Denies the stats_drag_start command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stats_focus_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stats-focus-content",
+          "markdownDescription": "Denies the stats_focus_content command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stats_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stats-restore",
+          "markdownDescription": "Denies the stats_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stats_set_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stats-set-size",
+          "markdownDescription": "Denies the stats_set_size command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stats_set_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stats-set-visible",
+          "markdownDescription": "Denies the stats_set_visible command without any pre-configured scope."
         },
         {
           "description": "Denies the switch_tab command without any pre-configured scope.",

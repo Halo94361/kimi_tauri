@@ -18,6 +18,8 @@
 
 ## 构建与运行
 
+打 `v*` 标签推送到 GitHub 后，Actions 会自动编译并在 Releases 页面附上 `tauri_kimi.exe`。本地构建：
+
 ```bash
 # 开发模式
 cd src-tauri && cargo tauri dev

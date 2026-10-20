@@ -35,6 +35,8 @@ cargo tauri dev                               # 开发模式
 cargo build --release                         # 产物 target/release/tauri_kimi.exe
 ```
 
+产物 exe 动态依赖 `WebView2Loader.dll`（webview2-com 构建脚本自动复制到 `target/release/`，无静态链接开关），分发时 zip 打包 exe + dll 同目录，CI 工作流已如此处理。
+
 工具链要求：rustc host 为 `x86_64-pc-windows-gnu`，gcc 用完整 MinGW-Builds（自带 `libgcc_eh.a`）。若用 w64devkit（缺 `libgcc_eh.a`），需自建本机 `src-tauri/.cargo/config.toml`（已 gitignore），用绝对路径把 `link-libs/` 加入链接参数：
 
 ```toml

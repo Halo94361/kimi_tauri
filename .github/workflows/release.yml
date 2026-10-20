@@ -33,15 +33,24 @@ jobs:
         working-directory: src-tauri
         run: cargo build --release
 
+      # exe 动态依赖 WebView2Loader.dll（webview2-com 构建脚本自动复制到
+      # target/release），必须与 exe 同目录分发，因此打包成 zip
+      - name: Package
+        working-directory: src-tauri
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/tauri_kimi.exe, target/release/WebView2Loader.dll dist/
+          Compress-Archive -Path dist/* -DestinationPath dist/tauri_kimi-windows-x64.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tauri_kimi-windows-x64
-          path: src-tauri/target/release/tauri_kimi.exe
+          path: src-tauri/dist/tauri_kimi-windows-x64.zip
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/tauri_kimi.exe
+          files: src-tauri/dist/tauri_kimi-windows-x64.zip
           generate_release_notes: true

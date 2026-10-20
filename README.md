@@ -18,7 +18,7 @@
 
 ## 构建与运行
 
-打 `v*` 标签推送到 GitHub 后，Actions 会自动编译并在 Releases 页面附上 `tauri_kimi.exe`。本地构建：
+打 `v*` 标签推送到 GitHub 后，Actions 会自动编译并在 Releases 页面发布 `tauri_kimi-windows-x64.zip`。**解压后请保持 `WebView2Loader.dll` 与 exe 同目录**（exe 动态依赖它；WebView2 运行时本身 Win10/11 通常已自带）。本地构建：
 
 ```bash
 # 开发模式

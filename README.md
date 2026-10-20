@@ -33,3 +33,7 @@ cd src-tauri && cargo build --release
 - 启动时自动执行 `kimi web --rc --no-open --port <port>`，端口首选 58627，占用时自动回退；`--rc` 允许手机或另一台电脑接管本机会话。
 - 关闭窗口只隐藏到托盘，需从托盘菜单“退出”才会结束 `kimi web` 子进程。
 - 架构与开发细节见 [AGENTS.md](AGENTS.md)。
+
+## 许可证
+
+本项目以 [MIT](LICENSE) 发布。第三方组件：内置字体子集更纱黑体（Sarasa Gothic，OFL-1.1，见 `ui/fonts/LICENSE-Sarasa-Gothic.txt`）；`src-tauri/link-libs/libgcc_eh.a` 来自 GCC 运行时库（GPL-3.0 with GCC Runtime Library Exception，链接使用不构成衍生作品）。

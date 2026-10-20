@@ -1,0 +1,43 @@
+# Rust / Cargo
+/target/
+**/target/
+**/*.rs.bk
+*.bk
+
+# Tauri
+src-tauri/target/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# 本机 cargo 配置（w64devkit 缺 libgcc_eh 时需指向本机 link-libs 绝对路径，不入库）
+src-tauri/.cargo/
+
+# Python 虚拟环境与脚本生成物
+.venv/
+scripts/exe_icon_check.png
+
+# IDE / Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.sublime-project
+*.sublime-workspace
+

@@ -1,0 +1,36 @@
+[package]
+name = "tauri_kimi"
+version = "0.4.0"
+edition = "2021"
+
+[lib]
+name = "tauri_kimi_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# unstable feature：解锁多 WebView 所需的 WebviewBuilder / WindowBuilder /
+# Window::add_child / Manager::get_webview 等 API
+tauri = { version = "2", features = ["tray-icon", "unstable"] }
+tauri-plugin-opener = "2"
+regex = "1"
+serde_json = "1"
+# std 无法获取本地时区；用量统计按本地日期分桶需要 epoch 毫秒 → 本地日期换算
+time = { version = "0.3", features = ["local-offset"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1

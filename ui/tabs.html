@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kimi Code - 选项卡</title>
+  <style>
+    /* 更纱黑体等宽子集：随 ui 目录一起打进二进制，不依赖系统是否安装字体 */
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }
+    /* 深浅色双主题：默认深色，prefers-color-scheme: light 切浅色（首报前的兜底）；
+       收到 Rust 转发的页面主题采样结果后由 data-theme 属性精确覆盖 */
+    :root {
+      --bg: #1a1a1e;
+      --fg: #a1a1aa;
+      --fg-hover: #d4d4d8;
+      --fg-active: #ffffff;
+      --divider: rgba(255, 255, 255, 0.08);
+      --accent: #7c3aed;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff;
+        --fg: #6b7280;
+        --fg-hover: #374151;
+        --fg-active: #111827;
+        --divider: rgba(0, 0, 0, 0.08);
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #1a1a1e;
+      --fg: #a1a1aa;
+      --fg-hover: #d4d4d8;
+      --fg-active: #ffffff;
+      --divider: rgba(255, 255, 255, 0.08);
+    }
+    :root[data-theme="light"] {
+      --bg: #ffffff;
+      --fg: #6b7280;
+      --fg-hover: #374151;
+      --fg-active: #111827;
+      --divider: rgba(0, 0, 0, 0.08);
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      font-family: "SarasaMonoSC", "Sarasa Mono SC", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
+      user-select: none;
+    }
+    .bar {
+      display: flex;
+      align-items: stretch;
+      height: 100%;
+      padding: 0 8px;
+      box-sizing: border-box;
+      border-bottom: 1px solid var(--divider);
+    }
+    .tab {
+      display: flex;
+      align-items: center;
+      padding: 0 18px;
+      font-size: 13px;
+      color: var(--fg);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+    .tab:hover { color: var(--fg-hover); }
+    .tab.active {
+      color: var(--fg-active);
+      border-bottom-color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <div class="tab active" data-tab="local">本地</div>
+    <div class="tab" data-tab="remote">远端</div>
+  </div>
+  <script>
+    const tabs = document.querySelectorAll(".tab");
+    function setActive(tab) {
+      tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
+    }
+    tabs.forEach(t => t.addEventListener("click", () => {
+      setActive(t.dataset.tab);
+      window.__TAURI__.core.invoke("switch_tab", { tab: t.dataset.tab }).catch(() => {});
+    }));
+    // Rust 侧强制切卡（如本地服务出错）时同步高亮
+    window.__TAURI__.event.listen("tab-changed", e => setActive(e.payload));
+    // Rust 侧页面主题采样结果：精确覆盖 prefers-color-scheme 兜底
+    window.__TAURI__.event.listen("theme-changed", e => {
+      document.documentElement.dataset.theme = e.payload;
+    });
+  </script>
+</body>
+</html>

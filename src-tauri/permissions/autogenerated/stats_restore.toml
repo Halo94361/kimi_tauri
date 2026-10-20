@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stats-restore"
+description = "Enables the stats_restore command without any pre-configured scope."
+commands.allow = ["stats_restore"]
+
+[[permission]]
+identifier = "deny-stats-restore"
+description = "Denies the stats_restore command without any pre-configured scope."
+commands.deny = ["stats_restore"]

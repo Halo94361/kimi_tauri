@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stats-drag-start"
+description = "Enables the stats_drag_start command without any pre-configured scope."
+commands.allow = ["stats_drag_start"]
+
+[[permission]]
+identifier = "deny-stats-drag-start"
+description = "Denies the stats_drag_start command without any pre-configured scope."
+commands.deny = ["stats_drag_start"]

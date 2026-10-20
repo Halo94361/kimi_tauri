@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stats-focus-content"
+description = "Enables the stats_focus_content command without any pre-configured scope."
+commands.allow = ["stats_focus_content"]
+
+[[permission]]
+identifier = "deny-stats-focus-content"
+description = "Denies the stats_focus_content command without any pre-configured scope."
+commands.deny = ["stats_focus_content"]

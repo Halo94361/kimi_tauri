@@ -53,7 +53,7 @@ bash scripts/check_env.sh | diff scripts/check_env_golden.txt -
 
 重点核对版本号一致、两处 `libgcc_eh.a` 都在、无失效路径告警。更新 golden：`bash scripts/check_env.sh > scripts/check_env_golden.txt`。
 
-CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test`（含链接与单测）；推 `v*` 标签或手动 dispatch 才编译并打包。
+CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。
 
 ## 开发约定
 

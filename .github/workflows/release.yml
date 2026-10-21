@@ -36,10 +36,13 @@ jobs:
         run: cargo check --all-targets
 
       # 项目无独立测试目录，cargo test 同时承担链接烟测与 remote.rs 的
-      # 环回 HTTP 客户端单测
+      # 环回 HTTP 客户端单测。
+      # 必须用 release：debug 版 cdylib 的导出符号数超过 MinGW 的 65535
+      # 序数上限（ld.bfd: export ordinal too large），release + LTO 才能链接；
+      # 单测逻辑与优化级别无关
       - name: Test
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --release
 
   build:
     # 标签推送或手动 dispatch 才产出二进制

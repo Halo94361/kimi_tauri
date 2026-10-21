@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Child;
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 
 use crate::stats_win::{STATS_BAR_HEIGHT, STATS_WIDTH};
@@ -31,6 +32,40 @@ pub(crate) struct AppState {
     pub(crate) stats_dragging: Mutex<bool>,
     /// 内容页当前打开的会话 id（由 SESSION_REPORTER_JS 上报）
     pub(crate) reported_session: Mutex<String>,
+    /// 当前 kimi web 子进程代次：重启后旧线程的解析/握手结果据此丢弃
+    pub(crate) server_gen: AtomicU64,
+    /// 本地服务端点快照：就绪时写入，子进程退出或重启时清空
+    pub(crate) endpoint: Mutex<Option<LocalEndpoint>>,
+    /// 远程控制隧道状态（选项卡栏提示与重试按钮的数据源）
+    pub(crate) remote: Mutex<RemoteStatus>,
+}
+
+/// 远程控制隧道的阶段，与 kimi web 的 `data.state`（off/starting/on）对应
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum RemotePhase {
+    #[default]
+    Idle,
+    Connecting,
+    Connected,
+    Failed,
+}
+
+/// 远程控制状态：gen 标识所属子进程代次，避免旧代次线程覆盖新状态
+#[derive(Clone, Default)]
+pub(crate) struct RemoteStatus {
+    pub(crate) gen: u64,
+    pub(crate) phase: RemotePhase,
+    /// 失败原因（接口 msg 首行或本地错误描述），直接展示在提示条 title 上
+    pub(crate) reason: String,
+    /// 接口业务错误码，仅用于诊断
+    pub(crate) code: Option<i64>,
+}
+
+/// 本地服务端点快照：端口与 token 一次性取出，避免加锁间隙被重启替换
+#[derive(Clone)]
+pub(crate) struct LocalEndpoint {
+    pub(crate) port: u16,
+    pub(crate) token: String,
 }
 
 /// 统计浮窗几何：悬浮/吸附两种模式共用；坐标为相对主窗口客户区的逻辑像素

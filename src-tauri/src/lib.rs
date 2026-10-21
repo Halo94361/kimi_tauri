@@ -3,6 +3,7 @@
 //! stats_win（统计浮窗）/ usage（用量统计）/ inject（注入脚本）/ win_job（进程树回收）
 
 mod inject;
+mod remote;
 mod server;
 mod state;
 mod stats_win;
@@ -39,6 +40,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             server::last_error,
             server::restart_server,
+            remote::remote_status,
+            remote::retry_remote,
             window::show_window,
             usage::session_stats,
             usage::daily_stats,

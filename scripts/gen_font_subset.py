@@ -35,9 +35,11 @@ def gb2312_hanzi(level: int) -> set:
 
 
 def repo_chars() -> set:
-    """页面与 Rust 侧出现过的非 ASCII 字符。"""
+    """页面与 Rust 侧出现过的非 ASCII 字符（含拆分后的所有模块）。"""
     chars = set()
-    targets = list((ROOT / "ui").glob("*.html")) + [ROOT / "src-tauri" / "src" / "lib.rs"]
+    targets = list((ROOT / "ui").glob("*.html")) + list(
+        (ROOT / "src-tauri" / "src").rglob("*.rs")
+    )
     for path in targets:
         if not path.exists():
             continue

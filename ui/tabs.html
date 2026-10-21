@@ -20,7 +20,8 @@
       --fg-hover: #d4d4d8;
       --fg-active: #ffffff;
       --divider: rgba(255, 255, 255, 0.08);
-      --accent: #7c3aed;
+      /* Kimi 品牌蓝（深色主题） */
+      --accent: #1a88ff;
     }
     @media (prefers-color-scheme: light) {
       :root {
@@ -29,6 +30,7 @@
         --fg-hover: #374151;
         --fg-active: #111827;
         --divider: rgba(0, 0, 0, 0.08);
+        --accent: #1783ff;
       }
     }
     :root[data-theme="dark"] {
@@ -37,6 +39,7 @@
       --fg-hover: #d4d4d8;
       --fg-active: #ffffff;
       --divider: rgba(255, 255, 255, 0.08);
+      --accent: #1a88ff;
     }
     :root[data-theme="light"] {
       --bg: #ffffff;
@@ -44,6 +47,7 @@
       --fg-hover: #374151;
       --fg-active: #111827;
       --divider: rgba(0, 0, 0, 0.08);
+      --accent: #1783ff;
     }
     html, body {
       margin: 0;
@@ -75,12 +79,58 @@
       color: var(--fg-active);
       border-bottom-color: var(--accent);
     }
+    /* 远程控制提示条：连接中弱化显示，失败时给重试按钮 */
+    .remote-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      align-self: center;
+      min-width: 0;
+      /* 紧贴选项卡左侧；宽度上限保证最小窗宽下也不会碰到右侧吸附的统计浮窗 */
+      max-width: 220px;
+      height: 24px;
+      margin-left: 12px;
+      padding: 0 4px 0 10px;
+      box-sizing: border-box;
+      border: 1px solid var(--divider);
+      border-radius: 12px;
+      font-size: 12px;
+      color: var(--fg);
+      overflow: hidden;
+    }
+    .remote-chip[hidden] { display: none; }
+    .remote-chip.connecting { opacity: 0.7; }
+    .remote-chip.failed { color: var(--fg-hover); }
+    .remote-text {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .remote-retry {
+      flex: none;
+      height: 22px;
+      padding: 0 9px;
+      border: none;
+      border-radius: 11px;
+      background: var(--accent);
+      color: #fff;
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .remote-retry[hidden] { display: none; }
+    .remote-retry:hover { filter: brightness(1.1); }
   </style>
 </head>
 <body>
   <div class="bar">
     <div class="tab active" data-tab="local">本地</div>
     <div class="tab" data-tab="remote">远端</div>
+    <div class="remote-chip" id="remote-chip" hidden>
+      <span class="remote-text" id="remote-text"></span>
+      <button class="remote-retry" id="remote-retry" hidden>重试</button>
+    </div>
   </div>
   <script>
     const tabs = document.querySelectorAll(".tab");
@@ -96,6 +146,40 @@
     // Rust 侧页面主题采样结果：精确覆盖 prefers-color-scheme 兜底
     window.__TAURI__.event.listen("theme-changed", e => {
       document.documentElement.dataset.theme = e.payload;
+    });
+
+    // 远程控制状态：连接中/失败时显示提示；失败附原因（hover）与重试按钮
+    const remoteChip = document.getElementById("remote-chip");
+    const remoteText = document.getElementById("remote-text");
+    const remoteRetry = document.getElementById("remote-retry");
+    function renderRemote(status) {
+      const state = status && status.state;
+      if (state === "failed") {
+        remoteChip.hidden = false;
+        remoteChip.classList.remove("connecting");
+        remoteChip.classList.add("failed");
+        remoteText.textContent = "远程控制未连接";
+        remoteChip.title = status.reason ? String(status.reason).slice(0, 120) : "";
+        remoteRetry.hidden = false;
+      } else if (state === "connecting") {
+        remoteChip.hidden = false;
+        remoteChip.classList.remove("failed");
+        remoteChip.classList.add("connecting");
+        remoteText.textContent = "远程控制连接中…";
+        remoteChip.title = "";
+        remoteRetry.hidden = true;
+      } else {
+        remoteChip.hidden = true;
+        remoteChip.classList.remove("connecting", "failed");
+        remoteChip.title = "";
+        remoteRetry.hidden = true;
+      }
+    }
+    // 先注册监听再同步查询：避免两者之间产生的状态事件丢失
+    window.__TAURI__.event.listen("remote-status", e => renderRemote(e.payload));
+    window.__TAURI__.core.invoke("remote_status").then(renderRemote).catch(() => {});
+    remoteRetry.addEventListener("click", () => {
+      window.__TAURI__.core.invoke("retry_remote").catch(() => {});
     });
   </script>
 </body>

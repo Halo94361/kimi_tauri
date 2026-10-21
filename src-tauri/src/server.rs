@@ -2,12 +2,13 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use regex::Regex;
 use tauri::{AppHandle, Manager};
 
-use crate::state::AppState;
+use crate::state::{AppState, LocalEndpoint};
 use crate::window::{show_main_window, switch_to_tab};
 
 const KIMI_PORT: u16 = 58627;
@@ -38,9 +39,9 @@ fn spawn_kimi() -> Result<Child, String> {
     let mut last_err = String::new();
     for cand in &candidates {
         let mut cmd = Command::new(cand);
-        // --rc：本地 web 启动的同时注册到 Kimi Remote Control，
-        // 远端（手机/另一台电脑）可通过 code-rc.kimi.com 接管本机会话
-        cmd.args(["web", "--rc", "--no-open", "--port", &port.to_string()])
+        // 不带 --rc：CLI 的 --rc 会在打印本地 URL 前同步等待远端握手，断网时
+        // 本地界面完全不可用。隧道改为服务就绪后由壳经本地接口开启（remote 模块）
+        cmd.args(["web", "--no-open", "--port", &port.to_string()])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -108,13 +109,18 @@ pub(crate) fn kill_child(state: &AppState) {
 
 /// 启动（或重启）kimi web 子进程，并在就绪后把主窗口导航到 web UI
 pub(crate) fn start_server(app: &AppHandle) {
-    {
+    // 代次先自增再杀旧进程：旧 reader 线程 EOF 后看到代次不匹配会直接退出，
+    // 不会误杀刚拉起的新子进程（原实现只看 quitting，存在竞态）
+    let gen = {
         let state = app.state::<AppState>();
+        let gen = state.server_gen.fetch_add(1, Ordering::SeqCst) + 1;
         *state.quitting.lock().unwrap() = false;
         *state.ready.lock().unwrap() = false;
         *state.last_error.lock().unwrap() = String::new();
         kill_child(&state);
-    }
+        gen
+    };
+    crate::remote::reset(app, gen);
 
     let mut child = match spawn_kimi() {
         Ok(c) => c,
@@ -143,21 +149,31 @@ pub(crate) fn start_server(app: &AppHandle) {
     let stdout = child.stdout.take().expect("stdout piped");
     app.state::<AppState>().child.lock().unwrap().replace(child);
 
-    // 读子进程 stdout：解析端口与 token，EOF 意味着服务退出
+    // 读子进程 stdout：解析端口与 token，EOF 意味着服务退出。
+    // 用 read_until + 有损解码：原 .lines() 遇到非 UTF-8 会直接结束循环，
+    // 被误判成“子进程退出”；同时剥离 ANSI，避免 token 尾部带上 \x1b[0m
     let app_reader = app.clone();
     std::thread::spawn(move || {
         let url_re = Regex::new(r#"http://[\w.%-]+:(\d+)[^\s"']*#token=([^\s"']+)"#).unwrap();
         let port_re = Regex::new(r"127\.0\.0\.1:(\d+)").unwrap();
-        let token_re = Regex::new(r#"(?i)#token=([^\s"']+)|token\s*[:=]\s*([A-Za-z0-9._\-]+)"#).unwrap();
+        let token_re =
+            Regex::new(r#"(?i)#token=([^\s"']+)|token\s*[:=]\s*([A-Za-z0-9._\-]+)"#).unwrap();
+        let ansi_re = Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap();
         let mut port: Option<String> = None;
         let mut token: Option<String> = None;
         let mut navigated = false;
 
-        for line in BufReader::new(stdout).lines() {
-            let line = match line {
-                Ok(l) => l,
+        let mut reader = BufReader::new(stdout);
+        let mut raw = Vec::new();
+        loop {
+            raw.clear();
+            match reader.read_until(b'\n', &mut raw) {
+                Ok(0) => break,
+                Ok(_) => {}
                 Err(_) => break,
-            };
+            }
+            let line = String::from_utf8_lossy(&raw);
+            let line = ansi_re.replace_all(&line, "");
             if let Some(c) = url_re.captures(&line) {
                 port = Some(c[1].to_string());
                 token = Some(c[2].to_string());
@@ -178,20 +194,36 @@ pub(crate) fn start_server(app: &AppHandle) {
             }
             if !navigated {
                 if let (Some(p), Some(t)) = (&port, &token) {
-                    *app_reader.state::<AppState>().ready.lock().unwrap() = true;
+                    let state = app_reader.state::<AppState>();
+                    if state.server_gen.load(Ordering::SeqCst) != gen {
+                        return; // 旧进程的迟到输出：忽略，不覆盖新端点
+                    }
+                    if let Ok(port_num) = p.parse::<u16>() {
+                        *state.endpoint.lock().unwrap() = Some(LocalEndpoint {
+                            port: port_num,
+                            token: t.clone(),
+                        });
+                    }
+                    *state.ready.lock().unwrap() = true;
                     navigate_local(&app_reader, &format!("http://127.0.0.1:{p}/#token={t}"));
+                    // 本地界面已可用，后台开远程隧道（失败只提示，不阻塞本地）
+                    crate::remote::start_enable(&app_reader);
                     navigated = true;
                 }
             }
             // 导航完成后继续排空 stdout，防止管道写满阻塞子进程
         }
 
-        // stdout 关闭：子进程已退出
+        // stdout 关闭：子进程已退出（或已被重启替换）
         let state = app_reader.state::<AppState>();
+        if state.server_gen.load(Ordering::SeqCst) != gen {
+            return;
+        }
         if *state.quitting.lock().unwrap() {
             return;
         }
         kill_child(&state);
+        crate::remote::mark_idle(&app_reader, gen);
         if navigated {
             show_error(&app_reader, "kimi web 服务已断开。");
         } else {
@@ -204,6 +236,9 @@ pub(crate) fn start_server(app: &AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(READY_TIMEOUT);
         let state = app_watchdog.state::<AppState>();
+        if state.server_gen.load(Ordering::SeqCst) != gen {
+            return; // 已重启过，旧看门狗不再干预
+        }
         if *state.quitting.lock().unwrap() || *state.ready.lock().unwrap() {
             return;
         }

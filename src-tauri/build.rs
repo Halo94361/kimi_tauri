@@ -12,6 +12,8 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "last_error",
             "restart_server",
+            "remote_status",
+            "retry_remote",
             "show_window",
             "session_stats",
             "daily_stats",

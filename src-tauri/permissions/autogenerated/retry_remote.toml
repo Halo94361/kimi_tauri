@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-retry-remote"
+description = "Enables the retry_remote command without any pre-configured scope."
+commands.allow = ["retry_remote"]
+
+[[permission]]
+identifier = "deny-retry-remote"
+description = "Denies the retry_remote command without any pre-configured scope."
+commands.deny = ["retry_remote"]

@@ -8,6 +8,8 @@
     "opener:default",
     "allow-last-error",
     "allow-restart-server",
+    "allow-remote-status",
+    "allow-retry-remote",
     "allow-switch-tab",
     "allow-report-theme",
     "allow-session-stats",

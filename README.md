@@ -30,7 +30,7 @@ cd src-tauri && cargo build --release
 
 ## 说明
 
-- 启动时自动执行 `kimi web --rc --no-open --port <port>`，端口首选 58627，占用时自动回退；`--rc` 允许手机或另一台电脑接管本机会话。
+- 启动时执行 `kimi web --no-open --port <port>`，端口首选 58627，占用时自动回退；本地界面就绪后由壳调用本地 `/api/v1/remote-control` 接口开启远程隧道（手机或另一台电脑可接管本机会话）。网络不佳时开启失败不阻塞本地界面，选项卡栏会显示提示与「重试」按钮。
 - 关闭窗口只隐藏到托盘，需从托盘菜单“退出”才会结束 `kimi web` 子进程。
 - 架构与开发细节见 [AGENTS.md](AGENTS.md)。
 

@@ -27,7 +27,8 @@ Thumbs.db
 *~
 
 # 本机 cargo 配置（w64devkit 缺 libgcc_eh 时需指向本机 link-libs 绝对路径，不入库）
-src-tauri/.cargo/
+src-tauri/.cargo/*
+!src-tauri/.cargo/config.toml.example
 
 # Python 虚拟环境与脚本生成物
 .venv/

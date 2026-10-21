@@ -45,14 +45,6 @@ cargo build --release                         # 产物 target/release/tauri_kimi
 rustflags = ["-C", "link-arg=-L<仓库绝对路径>/src-tauri/link-libs"]
 ```
 
-换机后先跑环境检查（golden 已脱敏，用户名/安装路径差异可忽略）：
-
-```bash
-bash scripts/check_env.sh | diff scripts/check_env_golden.txt -
-```
-
-重点核对版本号一致、两处 `libgcc_eh.a` 都在、无失效路径告警。更新 golden：`bash scripts/check_env.sh > scripts/check_env_golden.txt`。
-
 CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。
 
 ## 开发约定

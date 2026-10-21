@@ -1,0 +1,56 @@
+name: release
+
+on:
+  # 打 v* 标签时编译并发布 Release（如 v0.4.0）
+  push:
+    tags: ["v*"]
+  # 手动触发：只编译出 artifact，不发 Release
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # gnu 工具链：本项目用 x86_64-pc-windows-gnu 链接（见 AGENTS.md 构建与验证）
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      # runner 自带 MSYS2 的完整 MinGW（含 libgcc_eh.a），加入 PATH 供链接
+      - name: Add MinGW to PATH
+        run: echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo build --release
+
+      # exe 动态依赖 WebView2Loader.dll（webview2-com 构建脚本自动复制到
+      # target/release），必须与 exe 同目录分发，因此打包成 zip
+      - name: Package
+        working-directory: src-tauri
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/tauri_kimi.exe, target/release/WebView2Loader.dll dist/
+          Compress-Archive -Path dist/* -DestinationPath dist/tauri_kimi-windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri_kimi-windows-x64
+          path: src-tauri/dist/tauri_kimi-windows-x64.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/dist/tauri_kimi-windows-x64.zip
+          generate_release_notes: true

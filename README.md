@@ -18,6 +18,8 @@
 
 ## 构建与运行
 
+打 `v*` 标签推送到 GitHub 后，Actions 会自动编译并在 Releases 页面发布 `tauri_kimi-windows-x64.zip`。**解压后请保持 `WebView2Loader.dll` 与 exe 同目录**（exe 动态依赖它；WebView2 运行时本身 Win10/11 通常已自带）。本地构建：
+
 ```bash
 # 开发模式
 cd src-tauri && cargo tauri dev
@@ -26,14 +28,12 @@ cd src-tauri && cargo tauri dev
 cd src-tauri && cargo build --release
 ```
 
-新机器先做环境检查：
-
-```bash
-bash scripts/check_env.sh | diff scripts/check_env_golden.txt -
-```
-
 ## 说明
 
 - 启动时自动执行 `kimi web --rc --no-open --port <port>`，端口首选 58627，占用时自动回退；`--rc` 允许手机或另一台电脑接管本机会话。
 - 关闭窗口只隐藏到托盘，需从托盘菜单“退出”才会结束 `kimi web` 子进程。
 - 架构与开发细节见 [AGENTS.md](AGENTS.md)。
+
+## 许可证
+
+本项目以 [MIT](LICENSE) 发布。第三方组件：内置字体子集更纱黑体（Sarasa Gothic，OFL-1.1，见 `ui/fonts/LICENSE-Sarasa-Gothic.txt`）；`src-tauri/link-libs/libgcc_eh.a` 来自 GCC 运行时库（GPL-3.0 with GCC Runtime Library Exception，链接使用不构成衍生作品）。

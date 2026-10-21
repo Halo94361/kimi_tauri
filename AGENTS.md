@@ -1,6 +1,6 @@
 # AGENTS.md - tauri_kimi 开发指南
 
-`tauri_kimi` 是 Tauri v2 (Rust) 的 Windows 桌面壳，把 `kimi web` 的本地 Web UI 包装成双击即用的原生窗口。核心逻辑集中在 `src-tauri/src/lib.rs`，前端只有 `ui/` 下四个原生静态页。
+`tauri_kimi` 是 Tauri v2 (Rust) 的 Windows 桌面壳，把 `kimi web` 的本地 Web UI 包装成双击即用的原生窗口。前端只有 `ui/` 下四个原生静态页。Rust 侧按领域分模块（`src-tauri/src/`）：`lib.rs`（入口：Builder/托盘/窗口与 WebView 创建）、`state.rs`（AppState 与数据struct）、`server.rs`（kimi 子进程生命周期）、`window.rs`（布局/选项卡/导航管控）、`stats_win.rs`（统计浮窗几何与拖动）、`usage.rs`（wire.jsonl 用量统计）、`inject.rs`（注入 JS 常量）、`win_job.rs`（Windows 进程树回收）。
 
 ## 架构
 
@@ -35,17 +35,18 @@ cargo tauri dev                               # 开发模式
 cargo build --release                         # 产物 target/release/tauri_kimi.exe
 ```
 
-换机后先跑环境检查：
+产物 exe 动态依赖 `WebView2Loader.dll`（webview2-com 构建脚本自动复制到 `target/release/`，无静态链接开关），分发时 zip 打包 exe + dll 同目录，CI 工作流已如此处理。
 
-```bash
-bash scripts/check_env.sh | diff scripts/check_env_golden.txt -
+工具链要求：rustc host 为 `x86_64-pc-windows-gnu`，gcc 用完整 MinGW-Builds（自带 `libgcc_eh.a`）。若用 w64devkit（缺 `libgcc_eh.a`），需自建本机 `src-tauri/.cargo/config.toml`（已 gitignore），用绝对路径把 `link-libs/` 加入链接参数：
+
+```toml
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-L<仓库绝对路径>/src-tauri/link-libs"]
 ```
-
-diff 中用户名/安装路径差异可忽略，重点核对版本一致、两个 `libgcc_eh.a` 都在、无失效路径告警。更新 golden：`bash scripts/check_env.sh > scripts/check_env_golden.txt`。
 
 ## 开发约定
 
-- 业务逻辑集中在 `lib.rs`，最小修改，不引入多余抽象。
+- 按领域模块组织（模块地图见首段），最小修改，不引入多余抽象。
 - 注释用中文，写设计意图与平台特殊处理；不写一次性排障记录。
 - `ui/` 保持纯原生 HTML/CSS/JS，禁止引入前端框架；Tauri API 走 `window.__TAURI__.core.invoke`。
 - 任何启动子进程的路径都必须保证 `WindowEvent::CloseRequested` 与异常分支能 `kill_child`，防止进程泄漏。

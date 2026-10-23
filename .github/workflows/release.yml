@@ -18,6 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Go sidecar：OpenCode Go 会话头代理，源码在 sidecar/ 下，随 Release 一起分发
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: sidecar/opencode-session-proxy/go.mod
+
+      - name: Build sidecar
+        working-directory: sidecar/opencode-session-proxy
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -buildvcs=false -ldflags="-s -w" -o opencode-session-proxy.exe .
+
       # gnu 工具链：本项目用 x86_64-pc-windows-gnu 链接（见 AGENTS.md 构建与验证）
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -51,6 +64,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Go sidecar：OpenCode Go 会话头代理，源码在 sidecar/ 下，随 Release 一起分发
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: sidecar/opencode-session-proxy/go.mod
+
+      - name: Build sidecar
+        working-directory: sidecar/opencode-session-proxy
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -buildvcs=false -ldflags="-s -w" -o opencode-session-proxy.exe .
+
       # gnu 工具链：本项目用 x86_64-pc-windows-gnu 链接（见 AGENTS.md 构建与验证）
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -69,12 +95,14 @@ jobs:
         run: cargo build --release
 
       # exe 动态依赖 WebView2Loader.dll（webview2-com 构建脚本自动复制到
-      # target/release），必须与 exe 同目录分发，因此打包成 zip
+      # target/release），必须与 exe 同目录分发，因此打包成 zip；
+      # sidecar 与主程序同目录，壳按 exe 同目录优先查找
       - name: Package
         working-directory: src-tauri
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/tauri_kimi.exe, target/release/WebView2Loader.dll dist/
+          Copy-Item ../sidecar/opencode-session-proxy/opencode-session-proxy.exe dist/
           Compress-Archive -Path dist/* -DestinationPath dist/tauri_kimi-windows-x64.zip
 
       - name: Upload artifact

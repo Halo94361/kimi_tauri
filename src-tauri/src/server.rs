@@ -1,6 +1,7 @@
 //! kimi web 子进程的生命周期：端口选择、spawn、就绪探测、看门狗与错误页
 
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use crate::state::{AppState, LocalEndpoint};
 use crate::window::{show_main_window, switch_to_tab};
 
 const KIMI_PORT: u16 = 58627;
+const PROXY_PORT: u16 = 8787;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 选定 kimi web 监听端口：首选固定端口，被占用时让系统分配空闲端口。
@@ -61,6 +63,94 @@ fn spawn_kimi() -> Result<Child, String> {
     ))
 }
 
+/// 代理是否已在本机端口上服务（另一实例已拉起，或上一个进程尚未退出）
+fn proxy_listening() -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    let addr = SocketAddr::from(([127, 0, 0, 1], PROXY_PORT));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+}
+
+/// 可选组件：把请求体里的 prompt_cache_key 映射为 OpenCode Go 要求的
+/// x-opencode-session 头（CLI 自身不发，见 MoonshotAI/kimi-code#3506）。
+/// 依次从 exe 同目录、~/.kimi-code/bin、PATH 查找；找不到时静默跳过，
+/// 不影响未使用 OpenCode Go 的用户
+fn spawn_proxy() -> Option<Child> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("opencode-session-proxy.exe"));
+        }
+    }
+    if let Ok(home) = std::env::var("USERPROFILE") {
+        candidates.push(
+            PathBuf::from(home)
+                .join(".kimi-code")
+                .join("bin")
+                .join("opencode-session-proxy.exe"),
+        );
+    }
+    candidates.push(PathBuf::from("opencode-session-proxy.exe"));
+
+    for cand in &candidates {
+        let mut cmd = Command::new(cand);
+        cmd.env("OCSP_LISTEN", format!("127.0.0.1:{PROXY_PORT}"))
+            .env("OCSP_UPSTREAM", "https://opencode.ai/inference/go")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        if let Ok(child) = cmd.spawn() {
+            return Some(child);
+        }
+    }
+    None
+}
+
+/// 确保代理在跑：已在监听则复用；否则拉起新进程并挂入 Job Object
+fn start_proxy(app: &AppHandle) {
+    if proxy_listening() {
+        return;
+    }
+    let Some(child) = spawn_proxy() else {
+        return;
+    };
+    #[cfg(windows)]
+    assign_to_job(app, &child);
+    let state = app.state::<AppState>();
+    let mut slot = state.proxy.lock().unwrap();
+    if let Some(mut old) = slot.take() {
+        let _ = old.kill();
+        let _ = old.wait();
+    }
+    *slot = Some(child);
+}
+
+fn kill_proxy(state: &AppState) {
+    if let Some(mut child) = state.proxy.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// 把子进程挂入 Job Object：壳退出时由系统级联回收
+#[cfg(windows)]
+fn assign_to_job(app: &AppHandle, child: &Child) {
+    let state = app.state::<AppState>();
+    let mut job = state.job.lock().unwrap();
+    if job.is_none() {
+        if let Ok(j) = crate::win_job::Job::new() {
+            *job = Some(j);
+        }
+    }
+    if let Some(j) = job.as_ref() {
+        let _ = j.assign(child);
+    }
+}
+
 /// 导航本地内容 WebView（本地 kimi web / 壳内建页面都加载在这个 WebView 里）
 pub(crate) fn navigate_local(app: &AppHandle, url: &str) {
     if let Some(w) = app.get_webview("local") {
@@ -97,6 +187,7 @@ pub(crate) fn quit_app(app: &AppHandle) {
     let state = app.state::<AppState>();
     *state.quitting.lock().unwrap() = true;
     kill_child(&state);
+    kill_proxy(&state);
     app.exit(0);
 }
 
@@ -122,6 +213,9 @@ pub(crate) fn start_server(app: &AppHandle) {
     };
     crate::remote::reset(app, gen);
 
+    // 先拉起可选代理：kimi 从启动到首次模型请求还有 UI 初始化时间
+    start_proxy(app);
+
     let mut child = match spawn_kimi() {
         Ok(c) => c,
         Err(e) => {
@@ -133,18 +227,7 @@ pub(crate) fn start_server(app: &AppHandle) {
     // 把 kimi.exe 挂入 Job Object：之后它启动的孙进程（含 MCP server）自动归入
     // 同一作业；job 创建/绑定失败时退回原有的直接 kill 清理，不影响启动
     #[cfg(windows)]
-    {
-        let state = app.state::<AppState>();
-        let mut job = state.job.lock().unwrap();
-        if job.is_none() {
-            if let Ok(j) = crate::win_job::Job::new() {
-                *job = Some(j);
-            }
-        }
-        if let Some(j) = job.as_ref() {
-            let _ = j.assign(&child);
-        }
-    }
+    assign_to_job(app, &child);
 
     let stdout = child.stdout.take().expect("stdout piped");
     app.state::<AppState>().child.lock().unwrap().replace(child);

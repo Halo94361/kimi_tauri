@@ -11,6 +11,8 @@ use crate::stats_win::{STATS_BAR_HEIGHT, STATS_WIDTH};
 #[derive(Default)]
 pub(crate) struct AppState {
     pub(crate) child: Mutex<Option<Child>>,
+    /// 可选的 OpenCode Go 会话头代理子进程（二进制缺失时为 None）
+    pub(crate) proxy: Mutex<Option<Child>>,
     /// 持有 job handle 使整个应用生命周期内 job 存活；进程退出时 handle 关闭，
     /// 触发 KILL_ON_JOB_CLOSE 级联回收 job 内所有进程
     #[cfg(windows)]

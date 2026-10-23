@@ -10,11 +10,12 @@
 - **统计浮窗主题**：跨 WebView 无法使用 `backdrop-filter`，`THEME_SAMPLE_JS` 额外上报页面背景色（`report_theme` 的 `bg`），浮窗以同色作基底消除圆角色差；深浅色与背景色经 `page-theme` 事件下发。
 - **统一等宽字体**：壳内自绘页面（`tabbar` / 启动页 / 错误页 / `stats`）统一用更纱黑体等宽子集 `ui/fonts/SarasaMonoSC-UI.woff2`（family `SarasaMonoSC`），随 `ui` 目录打进二进制，不依赖系统是否安装字体；kimi web 内容页不注入此字体。子集由 `scripts/gen_font_subset.py` 生成，新增页面文案后需重新生成。
 - **子进程直管**：Rust 直接 spawn `kimi web --no-open --port <port>`，Windows 下设置 `CREATE_NO_WINDOW`，避免控制台黑窗。不带 `--rc` 是有意为之：CLI 的 `--rc` 会在打印本地 URL 前同步等待远端握手，断网时本地界面完全不可用。
+- **OpenCode Go 代理（可选）**：CLI 不发 OpenCode Go 要求的 `x-opencode-session` 头（上游 [#3506](https://github.com/MoonshotAI/kimi-code/issues/3506) 明确拒绝适配）。`server.rs` 在启动 kimi 前尽力拉起 `opencode-session-proxy.exe`（依次查 exe 同目录、`%USERPROFILE%\.kimi-code\bin`、PATH），由它从请求体 `prompt_cache_key` 取值注入该头；找不到二进制时静默跳过，不影响其他 provider。启用时把对应 provider 的 `base_url` 指向 `http://127.0.0.1:8787/openai/v1`。
 - **远程控制开关**：服务就绪后由 `remote.rs` 调本地 `POST /api/v1/remote-control {"enabled":true}` 开隧道，失败只提示、不阻塞本地界面（选项卡栏显示「远程控制未连接」+「重试」）。断网时该 POST 在 CLI 内部永不返回（后台无限退避重连）且 enable 是队列串行的：实现固定 15s 超时，超时后立刻发 `{"enabled":false}` 打断 `starting` 并释放锁；重试前先 GET 状态，`on` 直接复用、`starting` 先取消。状态写回带子进程代次（`server_gen`），旧代次结果丢弃；已连接后每 90s 巡检，状态掉到 `off` 时重新提示。
 - **端口选择**：`pick_port` 首选 58627，被占用时改用系统空闲端口。注意 localStorage 按 origin 隔离，回退端口会让主题等页面设置重置（登录态与会话数据不受影响）。
 - **就绪探测**：读 stdout 正则解析端口与 token，30s 看门狗兜底；随后导航到 `http://127.0.0.1:<port>/#token=<token>`，并持续清空 stdout 防止管道写满。
 - **生命周期**：关窗仅隐藏（托盘驻留，子进程继续跑）；托盘“退出”才 kill 子进程并退出；子进程异常退出导航到 `error.html`，可调 `restart_server` 重启。
-- **进程树回收**：spawn 后把 `kimi.exe` 挂入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`win_job`），壳进程无论正常退出、被强杀还是崩溃都会级联回收 MCP 孙进程；创建/绑定失败时退回直接 kill。
+- **进程树回收**：spawn 后把 `kimi.exe` 与可选的 `opencode-session-proxy.exe` 挂入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`win_job`），壳进程无论正常退出、被强杀还是崩溃都会级联回收 MCP 孙进程；创建/绑定失败时退回直接 kill。
 - **外链管控**：`is_local()` 白名单（127.0.0.1 / localhost / tauri.localhost）内才允许窗口内导航，其余经 `tauri-plugin-opener` 交给系统浏览器。
 - **窗口尺寸**：按主显示器工作区 85% 钳制（宽 720~1600，高 480~1200），适配高 DPI。
 
@@ -37,6 +38,15 @@ cargo build --release                         # 产物 target/release/tauri_kimi
 ```
 
 产物 exe 动态依赖 `WebView2Loader.dll`（webview2-com 构建脚本自动复制到 `target/release/`，无静态链接开关），分发时 zip 打包 exe + dll 同目录，CI 工作流已如此处理。
+
+Go sidecar 在 `sidecar/opencode-session-proxy/` 下独立构建，无第三方依赖：
+
+```bash
+cd sidecar/opencode-session-proxy
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-s -w" -o opencode-session-proxy.exe .
+```
+
+CI 的 verify 与 build 两个 job 都会先编译它；Release 的 zip 内与 `tauri_kimi.exe` 同目录。仓库保留一份编译产物，未装 Go 的开发者可直接运行。
 
 工具链要求：rustc host 为 `x86_64-pc-windows-gnu`，gcc 用完整 MinGW-Builds（自带 `libgcc_eh.a`）。若用 w64devkit（缺 `libgcc_eh.a`），需自建本机 `src-tauri/.cargo/config.toml`（已 gitignore，可复制 `config.toml.example`），用绝对路径把 `link-libs/` 加入链接参数：
 

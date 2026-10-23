@@ -23,7 +23,7 @@ Kimi Code CLI（kimi web）
   │  {"model":"deepseek-v4.1-flash","prompt_cache_key":"session_...", ...}
   ▼
 opencode-session-proxy（127.0.0.1:8787）
-  │  1. 读取 body（上限 64 MiB）
+  │  1. 读取 body（默认上限 64 MiB，可配置）
   │  2. 解析 prompt_cache_key / metadata.user_id
   │  3. 覆盖 x-opencode-session
   │  4. 重写 URL 为 upstream + 原 path
@@ -37,7 +37,10 @@ https://opencode.ai/inference/go/...
 ## 一次请求的处理步骤
 
 1. 接受连接，只监听 `127.0.0.1`。
-2. 读完整请求体（最多 64 MiB；超限则不解析，原样转发）。
+2. 读取请求体（默认上限 64 MiB）：
+   - 未超限：完整缓冲后解析，按会话 ID 注入
+   - 已知 `Content-Length` 超限：不缓冲，原样流式转发，注入进程级 fallback ID
+   - chunked 且超限：已读前缀与剩余流拼接后转发，不截断，同样注入 fallback ID
 3. 反序列化 JSON，按优先级取会话 ID。
 4. 清洗 ID：只保留可打印 ASCII，去引号与反斜杠，截断到 191 字符。
 5. 删除客户端自带的 `x-opencode-session`（大小写两种），写入新值。
@@ -107,6 +110,7 @@ journalctl --user -u opencode-session-proxy -f
 | `-listen` / `OCSP_LISTEN` | `127.0.0.1:8787` | 监听地址 |
 | `-upstream` / `OCSP_UPSTREAM` | `https://opencode.ai/inference/go` | 上游前缀 |
 | `-debug` / `OCSP_DEBUG=1` | 关闭 | 每次请求打印注入的 session id 与来源 |
+| `-max-body` / `OCSP_MAX_BODY` | `64`（MiB） | 缓冲解析上限；超限时改为流式转发并注入 fallback ID |
 
 debug 日志只含路径、session id 和来源，不含请求体、Authorization 或 key。
 
@@ -141,7 +145,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 
 - **多实例**：第二个壳实例会复用第一个拉起的代理；先退出的实例会随 Job Object 带走代理，第二个实例的请求随之失败。
 - **端口探测只看 TCP 连通性**：8787 被其他程序占用时会被误判为“代理已在运行”。
-- **请求体全量缓冲**：上限 64 MiB，超出则不注入（当前聊天请求远小于此）。
+- **超限请求丢失每会话 ID**：超过 `-max-body`（默认 64 MiB）的请求仍会完整转发，但只能注入进程级 fallback ID，多个大会话会共用同一路由标识；需要时调大该值，代价是内存占用。纯文本请求（1M 上下文约 4 MB）远低于默认上限，图片密集的会话才可能触及。
 - **不处理鉴权**：`Authorization` 原样透传，代理不持有 key。
 - **仅本机**：绑定 `127.0.0.1`，不要改成 `0.0.0.0` 暴露到局域网。
 

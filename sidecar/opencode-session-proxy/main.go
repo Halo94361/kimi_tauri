@@ -21,10 +21,7 @@ import (
 	"time"
 )
 
-const (
-	maxBodyBytes  = 64 << 20
-	sessionHeader = "x-opencode-session"
-)
+const sessionHeader = "x-opencode-session"
 
 type payload struct {
 	PromptCacheKey string `json:"prompt_cache_key"`
@@ -37,7 +34,13 @@ func main() {
 	listen := flag.String("listen", env("OCSP_LISTEN", "127.0.0.1:8787"), "listen address")
 	upstreamRaw := flag.String("upstream", env("OCSP_UPSTREAM", "https://opencode.ai/inference/go"), "upstream base URL")
 	debug := flag.Bool("debug", env("OCSP_DEBUG", "") == "1", "log injected session ids")
+	maxBodyMiB := flag.Int64("max-body", envInt("OCSP_MAX_BODY", 64), "max buffered request body in MiB")
 	flag.Parse()
+
+	maxBody := *maxBodyMiB << 20
+	if maxBody <= 0 {
+		maxBody = 64 << 20
+	}
 
 	upstream, err := url.Parse(*upstreamRaw)
 	if err != nil || upstream.Scheme == "" || upstream.Host == "" {
@@ -48,7 +51,7 @@ func main() {
 
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			inject(pr, fallback, *debug)
+			inject(pr, fallback, maxBody, *debug)
 			pr.Out.URL.Scheme = upstream.Scheme
 			pr.Out.URL.Host = upstream.Host
 			pr.Out.URL.Path = joinPath(upstream.Path, pr.In.URL.Path)
@@ -99,24 +102,38 @@ func main() {
 	}
 }
 
-func inject(pr *httputil.ProxyRequest, fallback string, debug bool) {
+func inject(pr *httputil.ProxyRequest, fallback string, maxBody int64, debug bool) {
 	if pr.In.Body == nil || pr.In.Body == http.NoBody {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(pr.In.Body, maxBodyBytes+1))
-	if err != nil {
-		return
-	}
-	pr.Out.Body = io.NopCloser(bytes.NewReader(body))
-	pr.Out.ContentLength = int64(len(body))
-	pr.Out.Header.Set("Content-Length", strconv.Itoa(len(body)))
-	if len(body) > maxBodyBytes {
+	// 已知长度且超限：不缓冲，原样流式转发，仅注入进程级 fallback
+	if pr.In.ContentLength > maxBody {
+		applySession(pr, fallback, "fallback(oversize)", debug)
 		return
 	}
 
+	body, err := io.ReadAll(io.LimitReader(pr.In.Body, maxBody+1))
+	if err != nil {
+		return
+	}
+
+	// 未知长度（chunked）且超限：已读前缀 + 剩余流拼回去，避免截断请求体
+	if int64(len(body)) > maxBody {
+		pr.Out.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), pr.In.Body))
+		pr.Out.ContentLength = -1
+		pr.Out.Header.Del("Content-Length")
+		applySession(pr, fallback, "fallback(oversize)", debug)
+		return
+	}
+
+	pr.Out.Body = io.NopCloser(bytes.NewReader(body))
+	pr.Out.ContentLength = int64(len(body))
+	pr.Out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+
 	var p payload
 	if json.Unmarshal(body, &p) != nil {
+		applySession(pr, fallback, "fallback(unparsable)", debug)
 		return
 	}
 
@@ -131,11 +148,13 @@ func inject(pr *httputil.ProxyRequest, fallback string, debug bool) {
 	if id == "" {
 		id, source = fallback, "fallback"
 	}
+	applySession(pr, id, source, debug)
+}
 
+func applySession(pr *httputil.ProxyRequest, id, source string, debug bool) {
 	delete(pr.Out.Header, sessionHeader)
 	delete(pr.Out.Header, "X-Opencode-Session")
 	pr.Out.Header[sessionHeader] = []string{id}
-
 	if debug {
 		log.Printf("inject path=%s session=%s source=%s", pr.In.URL.Path, id, source)
 	}
@@ -177,4 +196,16 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envInt(key string, def int64) int64 {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		return def
+	}
+	return v
 }

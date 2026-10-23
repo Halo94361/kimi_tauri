@@ -32,7 +32,7 @@ cd src-tauri && cargo build --release
 
 - 启动时执行 `kimi web --no-open --port <port>`，端口首选 58627，占用时自动回退；本地界面就绪后由壳调用本地 `/api/v1/remote-control` 接口开启远程隧道（手机或另一台电脑可接管本机会话）。网络不佳时开启失败不阻塞本地界面，选项卡栏会显示提示与「重试」按钮。
 - 关闭窗口只隐藏到托盘，需从托盘菜单“退出”才会结束 `kimi web` 子进程。
-- 使用 OpenCode Go 订阅时，把 `%USERPROFILE%\.kimi-code\config.toml` 里该 provider 的 `base_url` 设为 `http://127.0.0.1:8787/openai/v1`。Release 包已附带 `opencode-session-proxy.exe`（与主程序同目录；源码与工作原理见 [sidecar/opencode-session-proxy/README.md](sidecar/opencode-session-proxy/README.md)），壳会在启动 `kimi` 前拉起并随进程树回收；缺少该文件时自动跳过，不影响其他 provider。
+- 使用 OpenCode Go 订阅时，把 `%USERPROFILE%\.kimi-code\config.toml` 里该 provider 的 `base_url` 设为 `http://127.0.0.1:58787/openai/v1`。Release 包已附带 `opencode-session-proxy.exe`（与主程序同目录；源码与工作原理见 [sidecar/opencode-session-proxy/README.md](sidecar/opencode-session-proxy/README.md)），壳会在启动 `kimi` 前拉起并随进程树回收；缺少该文件时自动跳过，不影响其他 provider。
 - 架构与开发细节见 [AGENTS.md](AGENTS.md)。
 
 ## 许可证

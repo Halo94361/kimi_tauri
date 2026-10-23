@@ -13,7 +13,7 @@ use crate::state::{AppState, LocalEndpoint};
 use crate::window::{show_main_window, switch_to_tab};
 
 const KIMI_PORT: u16 = 58627;
-const PROXY_PORT: u16 = 8787;
+const PROXY_PORT: u16 = 58787;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 选定 kimi web 监听端口：首选固定端口，被占用时让系统分配空闲端口。
@@ -111,7 +111,7 @@ fn proxy_required() -> bool {
     };
     let path = PathBuf::from(home).join(".kimi-code").join("config.toml");
     std::fs::read_to_string(path)
-        .map(|text| text.contains("127.0.0.1:8787") || text.contains("localhost:8787"))
+        .map(|text| text.contains("127.0.0.1:58787") || text.contains("localhost:58787"))
         .unwrap_or(false)
 }
 

@@ -31,7 +31,7 @@ type payload struct {
 }
 
 func main() {
-	listen := flag.String("listen", env("OCSP_LISTEN", "127.0.0.1:8787"), "listen address")
+	listen := flag.String("listen", env("OCSP_LISTEN", "127.0.0.1:58787"), "listen address")
 	upstreamRaw := flag.String("upstream", env("OCSP_UPSTREAM", "https://opencode.ai/inference/go"), "upstream base URL")
 	debug := flag.Bool("debug", env("OCSP_DEBUG", "") == "1", "log injected session ids")
 	maxBodyMiB := flag.Int64("max-body", envInt("OCSP_MAX_BODY", 64), "max buffered request body in MiB")

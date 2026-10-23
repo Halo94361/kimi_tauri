@@ -18,11 +18,11 @@ Kimi Code CLI 不发送这个头，并明确拒绝适配：官方理由是只按
 
 ```
 Kimi Code CLI（kimi web）
-  │  POST http://127.0.0.1:8787/openai/v1/chat/completions
+  │  POST http://127.0.0.1:58787/openai/v1/chat/completions
   │  Authorization: Bearer oc_sk_...
   │  {"model":"deepseek-v4.1-flash","prompt_cache_key":"session_...", ...}
   ▼
-opencode-session-proxy（127.0.0.1:8787）
+opencode-session-proxy（127.0.0.1:58787）
   │  1. 读取 body（默认上限 64 MiB，可配置）
   │  2. 解析 prompt_cache_key / metadata.user_id
   │  3. 覆盖 x-opencode-session
@@ -75,7 +75,7 @@ Kimi Code 的 `prompt_cache_key` 与它打印的 `session_<uuid>` 完全一致�
 [providers."OpenCode Go"]
 type = "openai"
 api_key = "oc_sk_..."
-base_url = "http://127.0.0.1:8787/openai/v1"
+base_url = "http://127.0.0.1:58787/openai/v1"
 ```
 
 `base_url` 若仍是 `https://opencode.ai/inference/go`，客户端会请求 `/chat/completions`（缺少 `/openai/v1`），上游返回 404。
@@ -90,7 +90,7 @@ base_url = "http://127.0.0.1:8787/openai/v1"
 - 否则按顺序查找二进制：exe 同目录 → `%USERPROFILE%\.kimi-code\bin` → PATH
 - 找到就 spawn（`CREATE_NO_WINDOW`），挂入与 `kimi.exe` 相同的 Job Object，最多等 3 秒确认健康
 - 找不到二进制 → 静默跳过，不影响其他 provider
-- 启动失败且 `config.toml` 确实指向 `127.0.0.1:8787` 时，选项卡栏显示「OpenCode 代理未启动」，hover 看原因，附「重试」；未使用该 provider 时不打扰
+- 启动失败且 `config.toml` 确实指向 `127.0.0.1:58787` 时，选项卡栏显示「OpenCode 代理未启动」，hover 看原因，附「重试」；未使用该 provider 时不打扰
 - 托盘“退出”时显式 kill；壳被强杀时由 Job Object 级联回收
 
 ### Linux
@@ -108,7 +108,7 @@ journalctl --user -u opencode-session-proxy -f
 
 | 参数 / 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `-listen` / `OCSP_LISTEN` | `127.0.0.1:8787` | 监听地址 |
+| `-listen` / `OCSP_LISTEN` | `127.0.0.1:58787` | 监听地址 |
 | `-upstream` / `OCSP_UPSTREAM` | `https://opencode.ai/inference/go` | 上游前缀 |
 | `-debug` / `OCSP_DEBUG=1` | 关闭 | 每次请求打印注入的 session id 与来源 |
 | `-max-body` / `OCSP_MAX_BODY` | `64`（MiB） | 缓冲解析上限；超限时改为流式转发并注入 fallback ID |
@@ -120,21 +120,21 @@ debug 日志只含路径、session id 和来源，不含请求体、Authorizatio
 正常日志：
 
 ```
-listening on 127.0.0.1:8787 -> https://opencode.ai/inference/go (debug=true)
+listening on 127.0.0.1:58787 -> https://opencode.ai/inference/go (debug=true)
 inject path=/openai/v1/chat/completions session=session_0c8c... source=prompt_cache_key
 ```
 
 健康检查（壳据此区分“代理正常 / 端口被占用”）：
 
 ```bash
-curl -s http://127.0.0.1:8787/__ocsp_health   # → opencode-session-proxy
+curl -s http://127.0.0.1:58787/__ocsp_health   # → opencode-session-proxy
 ```
 
 直连自测（key 用环境变量传入，不要写进命令历史）：
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' \
-  -X POST http://127.0.0.1:8787/openai/v1/chat/completions \
+  -X POST http://127.0.0.1:58787/openai/v1/chat/completions \
   -H "Authorization: Bearer $OPENCODE_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"model":"deepseek-v4.1-flash","messages":[{"role":"user","content":"hi"}],"prompt_cache_key":"ses_test"}'
@@ -146,12 +146,12 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 | `400 MissingSessionID` | 请求没经过代理，或代理没注入 | 查 `base_url`、代理日志 |
 | `502` | 代理未启动 / 上游不可达 | 看服务状态、`HTTPS_PROXY` |
 | `Invalid API key` | key 不属于该 workspace | 在 Console 重新生成 |
-| 连接被拒 | 端口无人监听 | 启动代理，或检查 8787 是否被占用 |
+| 连接被拒 | 端口无人监听 | 启动代理，或检查 58787 是否被占用 |
 
 ## 已知限制
 
 - **多实例**：第二个壳实例会复用第一个拉起的代理；先退出的实例会随 Job Object 带走代理，第二个实例的请求随之失败。
-- **端口探测只看 TCP 连通性**：8787 被其他程序占用时会被误判为“代理已在运行”。
+- **端口判定依赖健康端点**：只有 `/__ocsp_health` 返回代理标识才算就绪；其他程序占用 58787 会被判为“端口被占用”并提示，而不是误复用。
 - **超限请求丢失每会话 ID**：超过 `-max-body`（默认 64 MiB）的请求仍会完整转发，但只能注入进程级 fallback ID，多个大会话会共用同一路由标识；需要时调大该值，代价是内存占用。纯文本请求（1M 上下文约 4 MB）远低于默认上限，图片密集的会话才可能触及。
 - **不处理鉴权**：`Authorization` 原样透传，代理不持有 key。
 - **仅本机**：绑定 `127.0.0.1`，不要改成 `0.0.0.0` 暴露到局域网。

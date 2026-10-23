@@ -79,8 +79,9 @@
       color: var(--fg-active);
       border-bottom-color: var(--accent);
     }
-    /* 远程控制提示条：连接中弱化显示，失败时给重试按钮 */
-    .remote-chip {
+    /* 选项卡栏状态提示条（远程控制 / OpenCode 代理）：失败时给重试按钮 */
+    .remote-chip,
+    .proxy-chip {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -98,9 +99,11 @@
       color: var(--fg);
       overflow: hidden;
     }
-    .remote-chip[hidden] { display: none; }
+    .remote-chip[hidden],
+    .proxy-chip[hidden] { display: none; }
     .remote-chip.connecting { opacity: 0.7; }
-    .remote-chip.failed { color: var(--fg-hover); }
+    .remote-chip.failed,
+    .proxy-chip.failed { color: var(--fg-hover); }
     .remote-text {
       min-width: 0;
       white-space: nowrap;
@@ -130,6 +133,10 @@
     <div class="remote-chip" id="remote-chip" hidden>
       <span class="remote-text" id="remote-text"></span>
       <button class="remote-retry" id="remote-retry" hidden>重试</button>
+    </div>
+    <div class="proxy-chip" id="proxy-chip" hidden>
+      <span class="remote-text" id="proxy-text"></span>
+      <button class="remote-retry" id="proxy-retry" hidden>重试</button>
     </div>
   </div>
   <script>
@@ -180,6 +187,30 @@
     window.__TAURI__.core.invoke("remote_status").then(renderRemote).catch(() => {});
     remoteRetry.addEventListener("click", () => {
       window.__TAURI__.core.invoke("retry_remote").catch(() => {});
+    });
+
+    // OpenCode 代理状态：启动失败（端口被占用/二进制缺失/未就绪）时显示原因与重试
+    const proxyChip = document.getElementById("proxy-chip");
+    const proxyText = document.getElementById("proxy-text");
+    const proxyRetry = document.getElementById("proxy-retry");
+    function renderProxy(status) {
+      if (status && status.failed) {
+        proxyChip.hidden = false;
+        proxyChip.classList.add("failed");
+        proxyText.textContent = "OpenCode 代理未启动";
+        proxyChip.title = status.reason ? String(status.reason).slice(0, 120) : "";
+        proxyRetry.hidden = false;
+      } else {
+        proxyChip.hidden = true;
+        proxyChip.classList.remove("failed");
+        proxyChip.title = "";
+        proxyRetry.hidden = true;
+      }
+    }
+    window.__TAURI__.event.listen("proxy-status", e => renderProxy(e.payload));
+    window.__TAURI__.core.invoke("proxy_status").then(renderProxy).catch(() => {});
+    proxyRetry.addEventListener("click", () => {
+      window.__TAURI__.core.invoke("retry_proxy").catch(() => {});
     });
   </script>
 </body>

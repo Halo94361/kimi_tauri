@@ -357,6 +357,12 @@
           "markdownDescription": "Enables the last_error command without any pre-configured scope."
         },
         {
+          "description": "Enables the proxy_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-proxy-status",
+          "markdownDescription": "Enables the proxy_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the remote_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-remote-status",
@@ -379,6 +385,12 @@
           "type": "string",
           "const": "allow-restart-server",
           "markdownDescription": "Enables the restart_server command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the retry_proxy command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-retry-proxy",
+          "markdownDescription": "Enables the retry_proxy command without any pre-configured scope."
         },
         {
           "description": "Enables the retry_remote command without any pre-configured scope.",
@@ -447,6 +459,12 @@
           "markdownDescription": "Denies the last_error command without any pre-configured scope."
         },
         {
+          "description": "Denies the proxy_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-proxy-status",
+          "markdownDescription": "Denies the proxy_status command without any pre-configured scope."
+        },
+        {
           "description": "Denies the remote_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-remote-status",
@@ -469,6 +487,12 @@
           "type": "string",
           "const": "deny-restart-server",
           "markdownDescription": "Denies the restart_server command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the retry_proxy command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-retry-proxy",
+          "markdownDescription": "Denies the retry_proxy command without any pre-configured scope."
         },
         {
           "description": "Denies the retry_remote command without any pre-configured scope.",

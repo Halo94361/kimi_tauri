@@ -42,6 +42,8 @@ pub fn run() {
             server::restart_server,
             remote::remote_status,
             remote::retry_remote,
+            server::proxy_status,
+            server::retry_proxy,
             window::show_window,
             usage::session_stats,
             usage::daily_stats,

@@ -10,6 +10,8 @@
     "allow-restart-server",
     "allow-remote-status",
     "allow-retry-remote",
+    "allow-proxy-status",
+    "allow-retry-proxy",
     "allow-switch-tab",
     "allow-report-theme",
     "allow-session-stats",

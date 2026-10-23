@@ -80,9 +80,18 @@ func main() {
 		},
 	}
 
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/__ocsp_health" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = io.WriteString(w, "opencode-session-proxy\n")
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:              *listen,
-		Handler:           proxy,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}

@@ -14,6 +14,8 @@ fn main() {
             "restart_server",
             "remote_status",
             "retry_remote",
+            "proxy_status",
+            "retry_proxy",
             "show_window",
             "session_stats",
             "daily_stats",

@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use regex::Regex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::{AppState, LocalEndpoint};
 use crate::window::{show_main_window, switch_to_tab};
@@ -63,11 +63,66 @@ fn spawn_kimi() -> Result<Child, String> {
     ))
 }
 
-/// 代理是否已在本机端口上服务（另一实例已拉起，或上一个进程尚未退出）
-fn proxy_listening() -> bool {
+enum ProxyHealth {
+    /// 我们的代理在答健康检查
+    Healthy,
+    /// 端口被其他程序占用
+    Occupied,
+    /// 端口无人监听
+    Down,
+}
+
+/// 通过健康检查区分“我们的代理”“别人的服务”“没人监听”
+fn proxy_health() -> ProxyHealth {
+    use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
+
     let addr = SocketAddr::from(([127, 0, 0, 1], PROXY_PORT));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(300)) else {
+        return ProxyHealth::Down;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let req = format!(
+        "GET /__ocsp_health HTTP/1.1\r\nHost: 127.0.0.1:{PROXY_PORT}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(req.as_bytes()).is_err() {
+        return ProxyHealth::Occupied;
+    }
+    let mut buf = [0u8; 512];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    let resp = String::from_utf8_lossy(&buf[..n]);
+    let status_ok = resp
+        .lines()
+        .next()
+        .map(|line| line.contains(" 200"))
+        .unwrap_or(false);
+    if status_ok && resp.contains("opencode-session-proxy") {
+        ProxyHealth::Healthy
+    } else {
+        ProxyHealth::Occupied
+    }
+}
+
+/// 配置里是否真的把某个 provider 指向了本代理。
+/// 只有此时失败才打扰用户，避免未使用 OpenCode Go 的人被提示
+fn proxy_required() -> bool {
+    let Ok(home) = std::env::var("USERPROFILE") else {
+        return false;
+    };
+    let path = PathBuf::from(home).join(".kimi-code").join("config.toml");
+    std::fs::read_to_string(path)
+        .map(|text| text.contains("127.0.0.1:8787") || text.contains("localhost:8787"))
+        .unwrap_or(false)
+}
+
+fn set_proxy_error(app: &AppHandle, reason: Option<String>) {
+    let state = app.state::<AppState>();
+    *state.proxy_error.lock().unwrap() = reason.clone();
+    let _ = app.emit_to(
+        "tabbar",
+        "proxy-status",
+        serde_json::json!({ "failed": reason.is_some(), "reason": reason.unwrap_or_default() }),
+    );
 }
 
 /// 可选组件：把请求体里的 prompt_cache_key 映射为 OpenCode Go 要求的
@@ -110,23 +165,65 @@ fn spawn_proxy() -> Option<Child> {
     None
 }
 
-/// 确保代理在跑：已在监听则复用；否则拉起新进程并挂入 Job Object
-fn start_proxy(app: &AppHandle) {
-    if proxy_listening() {
-        return;
+/// 确保代理可用：健康则复用；否则拉起新进程并等待就绪。
+/// 失败原因写入 AppState，并通过 proxy-status 事件推给选项卡栏
+fn start_proxy(app: &AppHandle) -> Result<(), String> {
+    match proxy_health() {
+        ProxyHealth::Healthy => {
+            set_proxy_error(app, None);
+            return Ok(());
+        }
+        ProxyHealth::Occupied => {
+            return Err(report_proxy_failure(
+                app,
+                format!("端口 {PROXY_PORT} 已被其他程序占用"),
+            ));
+        }
+        ProxyHealth::Down => {}
     }
+
     let Some(child) = spawn_proxy() else {
-        return;
+        return Err(report_proxy_failure(
+            app,
+            "未找到 opencode-session-proxy.exe".to_string(),
+        ));
     };
     #[cfg(windows)]
     assign_to_job(app, &child);
-    let state = app.state::<AppState>();
-    let mut slot = state.proxy.lock().unwrap();
-    if let Some(mut old) = slot.take() {
-        let _ = old.kill();
-        let _ = old.wait();
+
+    {
+        let state = app.state::<AppState>();
+        let mut slot = state.proxy.lock().unwrap();
+        if let Some(mut old) = slot.take() {
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+        *slot = Some(child);
     }
-    *slot = Some(child);
+
+    // 最多等 3 秒，确认健康检查真的由我们的代理应答
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(200));
+        if matches!(proxy_health(), ProxyHealth::Healthy) {
+            set_proxy_error(app, None);
+            return Ok(());
+        }
+    }
+
+    Err(report_proxy_failure(
+        app,
+        format!("代理未能在 127.0.0.1:{PROXY_PORT} 就绪"),
+    ))
+}
+
+/// 只有配置确实指向代理时才提示，否则清掉旧提示
+fn report_proxy_failure(app: &AppHandle, reason: String) -> String {
+    if proxy_required() {
+        set_proxy_error(app, Some(reason.clone()));
+    } else {
+        set_proxy_error(app, None);
+    }
+    reason
 }
 
 fn kill_proxy(state: &AppState) {
@@ -213,8 +310,9 @@ pub(crate) fn start_server(app: &AppHandle) {
     };
     crate::remote::reset(app, gen);
 
-    // 先拉起可选代理：kimi 从启动到首次模型请求还有 UI 初始化时间
-    start_proxy(app);
+    // 先拉起可选代理：kimi 从启动到首次模型请求还有 UI 初始化时间。
+    // 失败不阻塞 kimi，原因经 proxy-status 事件显示在选项卡栏
+    let _ = start_proxy(app);
 
     let mut child = match spawn_kimi() {
         Ok(c) => c,
@@ -341,4 +439,15 @@ pub(crate) fn restart_server(app: AppHandle) {
         navigate_local(&app, &url);
     }
     start_server(&app);
+}
+
+#[tauri::command]
+pub(crate) fn proxy_status(state: tauri::State<AppState>) -> serde_json::Value {
+    let reason = state.proxy_error.lock().unwrap().clone();
+    serde_json::json!({ "failed": reason.is_some(), "reason": reason.unwrap_or_default() })
+}
+
+#[tauri::command]
+pub(crate) fn retry_proxy(app: AppHandle) {
+    let _ = start_proxy(&app);
 }

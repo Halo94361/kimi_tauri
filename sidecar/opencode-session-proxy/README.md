@@ -86,10 +86,11 @@ base_url = "http://127.0.0.1:8787/openai/v1"
 
 `src-tauri/src/server.rs` 在启动 `kimi web` 之前调用 `start_proxy`：
 
-- 端口 8787 已在监听 → 直接复用，不重复拉起
+- 先做健康检查：`/__ocsp_health` 返回代理标识 → 复用；端口能连上但不是代理 → 判为被其他程序占用；连不上 → 拉起
 - 否则按顺序查找二进制：exe 同目录 → `%USERPROFILE%\.kimi-code\bin` → PATH
-- 找到就 spawn（`CREATE_NO_WINDOW`），挂入与 `kimi.exe` 相同的 Job Object
+- 找到就 spawn（`CREATE_NO_WINDOW`），挂入与 `kimi.exe` 相同的 Job Object，最多等 3 秒确认健康
 - 找不到二进制 → 静默跳过，不影响其他 provider
+- 启动失败且 `config.toml` 确实指向 `127.0.0.1:8787` 时，选项卡栏显示「OpenCode 代理未启动」，hover 看原因，附「重试」；未使用该 provider 时不打扰
 - 托盘“退出”时显式 kill；壳被强杀时由 Job Object 级联回收
 
 ### Linux
@@ -121,6 +122,12 @@ debug 日志只含路径、session id 和来源，不含请求体、Authorizatio
 ```
 listening on 127.0.0.1:8787 -> https://opencode.ai/inference/go (debug=true)
 inject path=/openai/v1/chat/completions session=session_0c8c... source=prompt_cache_key
+```
+
+健康检查（壳据此区分“代理正常 / 端口被占用”）：
+
+```bash
+curl -s http://127.0.0.1:8787/__ocsp_health   # → opencode-session-proxy
 ```
 
 直连自测（key 用环境变量传入，不要写进命令历史）：

@@ -334,6 +334,9 @@ pub(crate) fn start_server(app: &AppHandle) {
     crate::remote::reset(app, gen);
 
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
+    // 记录本次启动实际使用的配置，供设置页判断「改了但还没重启生效」
+    *app.state::<AppState>().launched.lock().unwrap() =
+        (settings.kimi_path.clone(), settings.kimi_port);
 
     // 按代理模式决定是否拉起：kimi 从启动到首次模型请求还有 UI 初始化时间。
     // 失败不阻塞 kimi，原因经 proxy-status 事件显示在选项卡栏

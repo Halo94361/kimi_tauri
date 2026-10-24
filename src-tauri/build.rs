@@ -19,6 +19,7 @@ fn main() {
             "show_window",
             "session_stats",
             "daily_stats",
+            "weekly_stats",
             "switch_tab",
             "report_theme",
             "report_session",

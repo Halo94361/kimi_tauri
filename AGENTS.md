@@ -14,11 +14,11 @@
 - **远程控制开关**：服务就绪后由 `remote.rs` 调本地 `POST /api/v1/remote-control {"enabled":true}` 开隧道，失败只提示、不阻塞本地界面（选项卡栏显示「远程控制未连接」+「重试」），不自动重试。断网时该 POST 在 CLI 内部永不返回（后台无限退避重连）且 enable 是队列串行的：实现固定 15s 超时，超时后立刻发 `{"enabled":false}` 打断 `starting` 并释放锁；重试前先 GET 状态，`on` 直接复用、`starting` 先取消。状态写回带子进程代次（`server_gen`），旧代次结果丢弃；已连接后每 90s 巡检，状态掉到 `off` 时重新提示。设置 `remote_auto_connect=false` 时启动不再自动开启（只影响下次启动，不动当前隧道）；设置页可手动连接（`retry_remote`）与断开（`disconnect_remote`，发 `{"enabled":false}` 并回到 Idle）。
 - **端口选择**：`pick_port` 首选 58627，被占用时改用系统空闲端口；设置 `kimi_port` 非 0 时直接使用该端口（被占用由 CLI 自行 +1，实际端口以 stdout 解析为准）。注意 localStorage 按 origin 隔离，回退端口会让主题等页面设置重置（登录态与会话数据不受影响）。
 - **就绪探测**：读 stdout 正则解析端口与 token，30s 看门狗兜底；随后导航到 `http://127.0.0.1:<port>/#token=<token>`，并持续清空 stdout 防止管道写满。
-- **生命周期**：关窗行为由设置 `close_to_tray` 决定：默认仅隐藏（托盘驻留，子进程继续跑），选直接退出则走 `quit_app` 回收子进程；托盘“退出”始终 kill 子进程并退出；子进程异常退出导航到 `error.html`，可调 `restart_server` 重启。
+- **生命周期**：关窗行为由设置 `close_to_tray` 决定：默认仅隐藏（托盘驻留，子进程继续跑），选直接退出则走 `quit_app` 回收子进程；托盘菜单含显示窗口 / 设置（唤出并切到设置页）/ 重启本地服务 / 退出，“退出”始终 kill 子进程并退出；子进程异常退出导航到 `error.html`，可调 `restart_server` 重启。
 - **进程树回收**：spawn 后把 `kimi.exe` 与可选的 `opencode-session-proxy.exe` 挂入带 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object（`win_job`），壳进程无论正常退出、被强杀还是崩溃都会级联回收 MCP 孙进程；创建/绑定失败时退回直接 kill。
 - **外链管控**：`is_local()` 白名单（127.0.0.1 / localhost / tauri.localhost）内才允许窗口内导航，其余经 `tauri-plugin-opener` 交给系统浏览器。
 - **窗口尺寸**：按主显示器工作区 85% 钳制（宽 720~1600，高 480~1200），适配高 DPI。
-- **壳设置**：`settings.rs` 持久化到 `app_config_dir/settings.json`（Windows 为 `%APPDATA%\com.tauri-kimi.app\settings.json`），字段全带默认值、文件缺失或损坏回退默认；写入走 tmp + `MoveFileExW` 原子替换。`set_settings` 先落盘再生效，广播 `settings-changed` 并应用即时副作用（主题/远端选项卡/浮窗/代理模式）；kimi 路径与端口只保存，重启本地服务后生效。设置页 `ui/settings.html` 是第三个内容 WebView，命令：`get_settings` / `set_settings` / `reset_settings` / `get_diagnostics` / `refresh_cli_info` / `upgrade_cli` / `open_config_target` / `disconnect_remote` / `stats_reset_position`。
+- **壳设置**：`settings.rs` 持久化到 `app_config_dir/settings.json`（Windows 为 `%APPDATA%\com.tauri-kimi.app\settings.json`），字段全带默认值、文件缺失或损坏回退默认；写入走 tmp + `MoveFileExW` 原子替换。`set_settings` 先落盘再生效，广播 `settings-changed` 并应用即时副作用（主题/远端选项卡/浮窗/代理模式）；kimi 路径与端口只保存，重启本地服务后生效，`state.launched` 记录本次启动实际配置，与当前设置不一致时 `get_diagnostics.restart_pending=true`，设置页显示「待重启」提示条。设置页 `ui/settings.html` 是第三个内容 WebView，命令：`get_settings` / `set_settings` / `reset_settings` / `get_diagnostics` / `refresh_cli_info` / `upgrade_cli` / `open_config_target` / `disconnect_remote` / `stats_reset_position`。
 - **CLI 升级**：设置页二次确认（提示打断对话并重启）后 `upgrade_cli` 后台执行 `kimi upgrade -y`（10 分钟超时、stdout/stderr 捕获、防重入、`CREATE_NO_WINDOW`），成功走 `restart_server` 重启本地服务使新二进制生效，进度经 `cli-upgrade` 事件回发。`refresh_cli_info` 读 `kimi --version` 与 `~/.kimi-code/updates/latest.json`（`latest` / `checkedAt`），只做展示、不主动触发网络检查；`kimi upgrade` 没有只检查不安装的参数。诊断汇总不含 token。
 
 ## 关键契约
@@ -27,7 +27,7 @@
 - **通知**：窗口构建时用 `on_permission_request` 按设置 `notifications` 放行 `PermissionKind::Notifications`（需 tauri ≥ 2.12），关闭时返回 Deny；点击 toast 经 `show_window` 命令唤回窗口。
 - **ACL**：`build.rs` 的 `AppManifest.commands` 为自定义命令生成 `allow-*` 权限；应用源页面（`tabbar` / `local` 内建页 / `stats` / `settings`）声明在 `capabilities/default.json`，remote 源在 `capabilities/kimi-remote.json`（按 `remote.urls` 放行 `allow-show-window` / `allow-report-theme` / `allow-report-session`）；远程控制提示条位于 tabbar，两条命令（`allow-remote-status` / `allow-retry-remote`）声明在 `default.json`。`stats.html` 需要 `allow-session-stats` / `allow-daily-stats` 与全部 `allow-stats-*`；内容页的会话上报脚本需要 `allow-report-session`。设置页与选项卡栏用到的 `allow-get-settings` 等九条新命令同样只在 `default.json`，remote 源不授权。新增命令要同步这两处。
 - **敏感信息**：Bearer token 只存内存与 URL fragment，禁止写入日志或持久化。
-- **用量统计**：数据源是 `~/.kimi-code/sessions/<workDirKey>/<sessionId>/agents/*/wire.jsonl`；会话 token 累加 `usage.record`，缓存命中率 = `ΣinputCacheRead / Σ(inputOther+inputCacheRead+inputCacheCreation)`，TPS 取 `usage.record` 与最近 `llm.request` 配对（间隔 ≤300s）的最近 10 次均值；今日汇总按事件 epoch 毫秒分桶到本地日期（`time` crate 的 `local-offset`，失败回退 UTC）。
+- **用量统计**：数据源是 `~/.kimi-code/sessions/<workDirKey>/<sessionId>/agents/*/wire.jsonl`；会话 token 累加 `usage.record`，缓存命中率 = `ΣinputCacheRead / Σ(inputOther+inputCacheRead+inputCacheCreation)`，TPS 取 `usage.record` 与最近 `llm.request` 配对（间隔 ≤300s）的最近 10 次均值；今日汇总按事件 epoch 毫秒分桶到本地日期（`time` crate 的 `local-offset`，失败回退 UTC）。`weekly_stats` 供设置页近 7 天柱状图：逐日 `previous_day` 推日期边界（避免夏令时漂移），事件按 `bucket_index` 分桶；与 `daily_stats` 的常驻游标不同，它按需全量解析，但只读 mtime 不早于窗口起点的 wire 文件，窗口内无记录时 `found=false`。
 
 ## 构建与验证
 

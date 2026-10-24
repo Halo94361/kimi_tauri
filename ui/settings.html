@@ -106,6 +106,54 @@
     .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     #upgradeMsg { color: var(--muted); margin-top: 8px; white-space: pre-wrap; word-break: break-all; user-select: text; }
     #upgradeMsg.failed { color: #f47174; }
+    /* 待重启提示条：仅当启动配置与当前设置不一致时出现 */
+    .banner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: var(--panel);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 10px 16px;
+      margin-bottom: 14px;
+    }
+    .banner[hidden] { display: none; }
+    /* 近 7 天用量：纯 div 柱状图，输入/输出堆叠 */
+    #weekChart {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      height: 120px;
+      padding: 8px 2px 0;
+    }
+    .day {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 4px;
+      height: 100%;
+      min-width: 0;
+    }
+    .day .total { font-size: 11px; color: var(--muted); }
+    .day .stack {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      width: 100%;
+      max-width: 34px;
+      border-radius: 4px 4px 0 0;
+      overflow: hidden;
+    }
+    .day .in { background: var(--accent); }
+    .day .out { background: var(--muted); opacity: 0.55; }
+    .day .date { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .legend { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 12px; }
+    .legend i.in { background: var(--accent); }
+    .legend i.out { background: var(--muted); opacity: 0.55; }
     #toast {
       position: fixed;
       left: 50%;
@@ -144,6 +192,10 @@
 <body>
   <div class="wrap">
     <h1>设置</h1>
+    <div class="banner" id="restartBanner" hidden>
+      <span class="grow">kimi 路径或端口已修改，重启本地服务后才会生效。</span>
+      <button id="restartNow" class="primary">立即重启</button>
+    </div>
 
     <section>
       <h2>远程控制（rc 隧道）</h2>
@@ -212,6 +264,13 @@
       <label class="check"><input type="checkbox" id="stats_enabled" />显示用量统计浮窗</label>
       <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。</p>
       <div class="btns"><button id="resetStats">恢复默认位置</button></div>
+    </section>
+
+    <section>
+      <h2>近 7 天用量</h2>
+      <div id="weekChart"></div>
+      <div class="legend">输入（含缓存）<i class="in"></i>输出<i class="out"></i><span id="weekSummary" style="margin-left:12px"></span></div>
+      <div class="btns"><button id="refreshWeek">刷新用量</button></div>
     </section>
 
     <section>
@@ -344,11 +403,60 @@
           : "未就绪";
         $("remoteState").textContent = remoteText(d.remote);
         $("upgrade").disabled = !!d.upgrading;
+        // 启动配置与当前设置不一致时才提示需要重启
+        $("restartBanner").hidden = !d.restart_pending;
         renderProxy();
       }
       function pollDiag() {
         invoke("get_diagnostics").then(renderDiag).catch(() => {});
       }
+      // 提示条的「立即重启」复用重启按钮的确认流程
+      $("restartNow").addEventListener("click", () => $("restartServer").click());
+
+      /* ---------- 近 7 天用量 ---------- */
+      function fmtTokens(n) {
+        if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+        if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+        return String(n);
+      }
+      function renderWeek(data) {
+        const chart = $("weekChart");
+        chart.innerHTML = "";
+        const days = (data && data.days) || [];
+        const max = Math.max(1, ...days.map(d => d.input_total + d.output_total));
+        let sumIn = 0, sumOut = 0;
+        days.forEach(d => {
+          const total = d.input_total + d.output_total;
+          sumIn += d.input_total;
+          sumOut += d.output_total;
+          const h = Math.round(total / max * 72);
+          const inH = total ? Math.round(d.input_total / max * 72) : 0;
+          const outH = Math.max(0, h - inH);
+          const col = document.createElement("div");
+          col.className = "day";
+          col.title = d.date + "\n输入 " + d.input_total +
+            "（缓存读 " + d.cache_read + "，命中率 " + d.cache_hit_rate.toFixed(1) + "%）" +
+            "\n输出 " + d.output_total;
+          col.innerHTML =
+            '<div class="total">' + (total ? fmtTokens(total) : "") + "</div>" +
+            '<div class="stack" style="height:' + Math.max(2, h) + 'px">' +
+              '<div class="out" style="height:' + outH + 'px"></div>' +
+              '<div class="in" style="height:' + inH + 'px"></div>' +
+            "</div>" +
+            '<div class="date">' + d.date.slice(5) + "</div>";
+          chart.appendChild(col);
+        });
+        $("weekSummary").textContent = data && data.found
+          ? "合计 ↑" + fmtTokens(sumIn) + " ↓" + fmtTokens(sumOut)
+          : "暂无用量数据";
+      }
+      function loadWeekly() {
+        invoke("weekly_stats").then(renderWeek).catch(() => {
+          $("weekSummary").textContent = "用量读取失败";
+        });
+      }
+      $("refreshWeek").addEventListener("click", loadWeekly);
+      loadWeekly();
 
       /* ---------- 版本与升级 ---------- */
       let cliInfo = {};

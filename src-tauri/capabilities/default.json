@@ -16,6 +16,7 @@
     "allow-report-theme",
     "allow-session-stats",
     "allow-daily-stats",
+    "allow-weekly-stats",
     "allow-stats-restore",
     "allow-stats-set-size",
     "allow-stats-set-visible",

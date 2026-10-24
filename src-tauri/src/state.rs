@@ -44,6 +44,9 @@ pub(crate) struct AppState {
     pub(crate) remote: Mutex<RemoteStatus>,
     /// 壳自身设置（settings.rs 持久化；启动时从 settings.json 读入）
     pub(crate) settings: Mutex<crate::settings::Settings>,
+    /// 当前子进程实际使用的启动配置（kimi 路径、端口）：
+    /// 与 settings 不一致说明用户改了但还没重启服务，设置页据此提示
+    pub(crate) launched: Mutex<(String, u16)>,
     /// CLI 升级任务占用标记：同时只允许一个，进行中禁止重复触发
     pub(crate) upgrading: Mutex<bool>,
 }

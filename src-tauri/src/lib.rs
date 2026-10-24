@@ -49,6 +49,7 @@ pub fn run() {
             window::show_window,
             usage::session_stats,
             usage::daily_stats,
+            usage::weekly_stats,
             window::switch_tab,
             window::report_theme,
             usage::report_session,
@@ -72,9 +73,12 @@ pub fn run() {
             let loaded = settings::load(&app.handle());
             *app.state::<AppState>().settings.lock().unwrap() = loaded;
 
-            // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
+            // 系统托盘：关窗行为见 CloseRequested；菜单提供设置与重启入口，
+            // 「退出」才真正结束应用与子进程
             let tray_menu = MenuBuilder::new(app)
                 .item(&MenuItemBuilder::with_id("show", "显示窗口").build(app)?)
+                .item(&MenuItemBuilder::with_id("settings", "设置").build(app)?)
+                .item(&MenuItemBuilder::with_id("restart", "重启本地服务").build(app)?)
                 .separator()
                 .item(&MenuItemBuilder::with_id("quit", "退出").build(app)?)
                 .build()?;
@@ -83,6 +87,15 @@ pub fn run() {
                 .menu(&tray_menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main_window(app),
+                    "settings" => {
+                        show_main_window(app);
+                        crate::window::switch_to_tab(app, "settings");
+                    }
+                    "restart" => {
+                        show_main_window(app);
+                        crate::window::switch_to_tab(app, "local");
+                        server::restart_server(app.clone());
+                    }
                     "quit" => server::quit_app(app),
                     _ => {}
                 })

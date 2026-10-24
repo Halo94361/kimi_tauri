@@ -25,6 +25,11 @@ pub(crate) fn get_diagnostics(app: AppHandle) -> serde_json::Value {
     let proxy_error = state.proxy_error.lock().unwrap().clone();
     let proxy_running = state.proxy.lock().unwrap().is_some();
     let upgrading = *state.upgrading.lock().unwrap();
+    let restart_pending = {
+        let settings = state.settings.lock().unwrap();
+        let launched = state.launched.lock().unwrap();
+        settings.kimi_path != launched.0 || settings.kimi_port != launched.1
+    };
     serde_json::json!({
         "app_version": env!("CARGO_PKG_VERSION"),
         "server_ready": ready,
@@ -36,6 +41,7 @@ pub(crate) fn get_diagnostics(app: AppHandle) -> serde_json::Value {
             "running": proxy_running,
         },
         "upgrading": upgrading,
+        "restart_pending": restart_pending,
     })
 }
 

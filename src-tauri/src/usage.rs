@@ -323,3 +323,168 @@ pub(crate) async fn daily_stats(
         "cache_hit_rate": hit_rate,
     }))
 }
+
+/// 最近 7 天（含今天）的本地日期与各自 00:00 的 epoch 毫秒，按日期升序。
+/// 逐日用 previous_day 推，避免跨夏令时时直接减固定 24h 造成边界漂移
+fn last_seven_days() -> Vec<(String, i64)> {
+    use time::{OffsetDateTime, UtcOffset};
+    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+    let mut date = OffsetDateTime::now_utc().to_offset(offset).date();
+    let mut days = Vec::new();
+    for _ in 0..7 {
+        days.push((
+            date.to_string(),
+            date.midnight().assume_offset(offset).unix_timestamp() * 1000,
+        ));
+        match date.previous_day() {
+            Some(d) => date = d,
+            None => break,
+        }
+    }
+    days.reverse();
+    days
+}
+
+/// 事件时间落在哪一天：days 按 day_start 升序，返回下标；早于窗口返回 None
+fn bucket_index(days: &[(String, i64)], t: i64) -> Option<usize> {
+    if days.is_empty() || t < days[0].1 {
+        return None;
+    }
+    for i in 0..days.len() {
+        let before_next = i + 1 == days.len() || t < days[i + 1].1;
+        if t >= days[i].1 && before_next {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// 全量读取一个 wire.jsonl，把窗口内的 usage.record 聚合到对应日期；
+/// 返回是否命中过记录（文件名再新也不保证窗口内真有事件）
+fn consume_wire_week(days: &[(String, i64)], aggs: &mut [DailyAgg], path: &Path) -> bool {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    if std::fs::File::open(path)
+        .and_then(|mut f| f.read_to_end(&mut buf))
+        .is_err()
+    {
+        return false;
+    }
+    let mut found = false;
+    for line in String::from_utf8_lossy(&buf).lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("usage.record") {
+            continue;
+        }
+        let Some(t) = v.get("time").and_then(|t| t.as_i64()) else {
+            continue;
+        };
+        let Some(i) = bucket_index(days, t) else {
+            continue;
+        };
+        let Some(u) = v.get("usage") else { continue };
+        let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let agg = &mut aggs[i];
+        agg.input_other += get("inputOther");
+        agg.output += get("output");
+        agg.cache_read += get("inputCacheRead");
+        agg.cache_creation += get("inputCacheCreation");
+        found = true;
+    }
+    found
+}
+
+/// 近 7 天各日用量（全部会话，含子 agent）：设置页进入/手动刷新时调用。
+/// 与 daily_stats 的常驻增量游标不同，这里按需全量解析，但只读窗口内
+/// 活跃文件（append-only，mtime 早于窗口起点的文件不可能含窗口内事件）。
+/// async：目录遍历与文件读取可能阻塞，不能跑在主线程
+#[tauri::command]
+pub(crate) async fn weekly_stats(
+    _state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, ()> {
+    let days = last_seven_days();
+    let week_start = days.first().map(|d| d.1).unwrap_or(0);
+    let mut aggs: Vec<DailyAgg> = (0..days.len()).map(|_| DailyAgg::default()).collect();
+    let mut found = false;
+    if let Some(home) = kimi_code_home() {
+        if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
+            for wd in workdirs.flatten() {
+                let Ok(sessions) = std::fs::read_dir(wd.path()) else {
+                    continue;
+                };
+                for sess in sessions.flatten() {
+                    let Ok(agents) = std::fs::read_dir(sess.path().join("agents")) else {
+                        continue;
+                    };
+                    for agent in agents.flatten() {
+                        let wire = agent.path().join("wire.jsonl");
+                        if !wire.is_file() {
+                            continue;
+                        }
+                        let mtime_ms = wire
+                            .metadata()
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        if mtime_ms < week_start {
+                            continue;
+                        }
+                        if consume_wire_week(&days, &mut aggs, &wire) {
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let days_json: Vec<serde_json::Value> = days
+        .iter()
+        .zip(aggs.iter())
+        .map(|((date, _), agg)| {
+            let input_total = agg.input_other + agg.cache_read + agg.cache_creation;
+            let hit_rate = if input_total > 0 {
+                agg.cache_read as f64 * 100.0 / input_total as f64
+            } else {
+                0.0
+            };
+            serde_json::json!({
+                "date": date,
+                "input_total": input_total,
+                "output_total": agg.output,
+                "cache_read": agg.cache_read,
+                "cache_hit_rate": hit_rate,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "found": found, "days": days_json }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn week_has_seven_ascending_days() {
+        let days = last_seven_days();
+        assert_eq!(days.len(), 7);
+        for w in days.windows(2) {
+            assert!(w[0].1 < w[1].1);
+            assert_ne!(w[0].0, w[1].0);
+        }
+    }
+
+    #[test]
+    fn events_bucket_by_day_start() {
+        let days: Vec<(String, i64)> = (0..7i64).map(|i| (format!("d{i}"), i * 1000)).collect();
+        assert_eq!(bucket_index(&days, -1), None);
+        assert_eq!(bucket_index(&days, 0), Some(0));
+        assert_eq!(bucket_index(&days, 1500), Some(1));
+        assert_eq!(bucket_index(&days, 6500), Some(6));
+        // 晚于今天的事件归入今天，与 daily_stats 的口径一致
+        assert_eq!(bucket_index(&days, 999_999), Some(6));
+    }
+}

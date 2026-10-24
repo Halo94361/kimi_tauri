@@ -270,11 +270,12 @@
       position: absolute;
       top: -2px;
       bottom: -2px;
+      z-index: 2;
       width: 2px;
       margin-left: -1px;
       border-radius: 1px;
-      background: var(--text-3);
-      opacity: 0.8;
+      /* 线压在使用量填充之上：颜色必须比填充更实，否则落在绿条里的线会看不见 */
+      background: var(--text-2);
       transition: left 300ms cubic-bezier(0.23, 1, 0.32, 1);
     }
 
@@ -717,7 +718,7 @@
         if (statsPrefs.kimi) {
           plans += planBlock("kimi", "Kimi Code", "5h · 本周", kimi, [
             ["5 小时", "five_hour"],
-            ["本周", "weekly", function (d) { return weekDayPace(d); }]
+            ["本周", "weekly", function (d) { return weekDayPace(d.weekly); }]
           ]);
         }
         if (ocVisible) {

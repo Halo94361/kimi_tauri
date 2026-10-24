@@ -1,10 +1,13 @@
 //! tauri_kimi：把 kimi web 包装成双击即用的 Windows 桌面壳。
-//! 模块划分：state（全局状态）/ server（kimi 子进程）/ window（窗口与选项卡）/
-//! stats_win（统计浮窗）/ usage（用量统计）/ inject（注入脚本）/ win_job（进程树回收）
+//! 模块划分：state（全局状态）/ server（kimi 子进程）/ window（窗口、选项卡与主题）/
+//! stats_win（统计浮窗）/ usage（用量统计）/ inject（注入脚本）/
+//! settings（壳设置持久化）/ diagnostics（诊断与 CLI 升级）/ win_job（进程树回收）
 
+mod diagnostics;
 mod inject;
 mod remote;
 mod server;
+mod settings;
 mod state;
 mod stats_win;
 mod usage;
@@ -16,19 +19,18 @@ use std::time::Duration;
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse, WebviewBuilder};
+use tauri::webview::{NewWindowResponse, WebviewBuilder};
 use tauri::window::WindowBuilder;
-use tauri::{LogicalPosition, LogicalSize, Manager, Url, WebviewUrl};
+use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
 
 use crate::inject::{REFRESH_BRIDGE_JS, SESSION_REPORTER_JS, THEME_SAMPLE_JS};
 use crate::state::AppState;
 use crate::stats_win::{STATS_BAR_HEIGHT, STATS_WIDTH};
 use crate::window::{
-    is_local, is_remote_allowed, layout_webviews, open_external, show_main_window, TABBAR_HEIGHT,
+    ensure_remote_webview, is_local, layout_webviews, notification_permission, open_external,
+    show_main_window, TABBAR_HEIGHT,
 };
 
-/// 远端托管版 kimi web：登录态由 WebView2 用户数据目录持久化
-const REMOTE_URL: &str = "https://code-rc.kimi.com/";
 /// 活动页面主题采样周期：eval 一段只读脚本的开销可忽略，200ms 足够跟手
 const THEME_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -54,9 +56,22 @@ pub fn run() {
             stats_win::stats_set_size,
             stats_win::stats_set_visible,
             stats_win::stats_focus_content,
-            stats_win::stats_drag_start
+            stats_win::stats_drag_start,
+            stats_win::stats_reset_position,
+            remote::disconnect_remote,
+            settings::get_settings,
+            settings::set_settings,
+            settings::reset_settings,
+            diagnostics::get_diagnostics,
+            diagnostics::refresh_cli_info,
+            diagnostics::upgrade_cli,
+            diagnostics::open_config_target
         ])
         .setup(|app| {
+            // 壳自身设置先于窗口/子进程加载：远端选项卡、代理模式、端口等都读它
+            let loaded = settings::load(&app.handle());
+            *app.state::<AppState>().settings.lock().unwrap() = loaded;
+
             // 系统托盘：关窗仅隐藏，右键菜单"退出"才真正结束应用与子进程
             let tray_menu = MenuBuilder::new(app)
                 .item(&MenuItemBuilder::with_id("show", "显示窗口").build(app)?)
@@ -104,15 +119,15 @@ pub fn run() {
                 _ => (1280.0, 800.0),
             };
 
-            // 裸窗口 + 4 个子 WebView：tabbar（顶部选项卡栏）、local（本地 kimi web）、
-            // remote（远端托管服务）、stats（用量统计浮窗）；切换选项卡只改可见性，
-            // 两个会话同时存活，stats 始终置顶
+            // 裸窗口 + 5 个子 WebView：tabbar（顶部选项卡栏）、local（本地 kimi web）、
+            // remote（远端托管服务，可按设置不创建）、settings（设置页）、stats（用量统计浮窗）；
+            // 切换选项卡只改可见性，两个会话同时存活，stats 始终置顶（设置页打开时隐藏）
             let mut win_builder = WindowBuilder::new(app, "main")
                 .title("Kimi Code")
                 .inner_size(win_w, win_h)
                 .min_inner_size(720.0, 480.0)
                 .center()
-                // 先隐藏，待四个子 WebView 就位（远端与统计浮窗初始隐藏）后再显示，避免闪动
+                // 先隐藏，待子 WebView 就位（远端/设置/统计浮窗初始隐藏）后再显示，避免闪动
                 .visible(false);
             if let Some(icon) = app.default_window_icon() {
                 win_builder = win_builder.icon(icon.clone())?;
@@ -129,6 +144,7 @@ pub fn run() {
             )?;
 
             // 本地内容 WebView：承载壳内建页（index/error）与本地 kimi web
+            let perm_app = app.handle().clone();
             win.add_child(
                 WebviewBuilder::new("local", WebviewUrl::App("index.html".into()))
                     // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
@@ -137,12 +153,9 @@ pub fn run() {
                     .initialization_script(REFRESH_BRIDGE_JS)
                     // 上报当前会话 id，供独立的统计浮窗查询对应会话
                     .initialization_script(SESSION_REPORTER_JS)
-                    // 放行 Web 通知权限：WebView2 对未应答的权限请求默认拒绝，
+                    // Web 通知按设置放行：WebView2 对未应答的权限请求默认拒绝，
                     // 页面的 Web Notification API 会因此被静默吞掉
-                    .on_permission_request(|_, kind| match kind {
-                        PermissionKind::Notifications => PermissionResponse::Allow,
-                        _ => PermissionResponse::Default,
-                    })
+                    .on_permission_request(move |_, kind| notification_permission(&perm_app, kind))
                     .on_navigation(|url| {
                         if is_local(url) {
                             true
@@ -163,37 +176,19 @@ pub fn run() {
                 content_size,
             )?;
 
-            // 远端内容 WebView：托管服务自带登录与错误提示，壳只做域名白名单管控；
-            // 不注入统计浮窗（统计依赖本机 wire.jsonl，远端无数据）
-            let remote = win.add_child(
-                WebviewBuilder::new("remote", WebviewUrl::External(Url::parse(REMOTE_URL).unwrap()))
-                    .disable_drag_drop_handler()
-                    .initialization_script(REFRESH_BRIDGE_JS)
-                    .on_permission_request(|_, kind| match kind {
-                        PermissionKind::Notifications => PermissionResponse::Allow,
-                        _ => PermissionResponse::Default,
-                    })
-                    .on_navigation(|url| {
-                        if is_remote_allowed(url) {
-                            true
-                        } else {
-                            open_external(url);
-                            false
-                        }
-                    })
-                    .on_new_window(|url, _features| {
-                        if is_remote_allowed(&url) {
-                            NewWindowResponse::Allow
-                        } else {
-                            open_external(&url);
-                            NewWindowResponse::Deny
-                        }
-                    }),
+            // 远端内容 WebView 按设置创建（可隐藏「远端」选项卡）：
+            // 初始落在"本地"选项卡，远端后台预加载但不可见
+            if app.state::<AppState>().settings.lock().unwrap().show_remote_tab {
+                ensure_remote_webview(app.handle())?;
+            }
+
+            // 设置页：第三个内容 WebView，纯原生自绘；初始隐藏，切到「设置」时显示
+            win.add_child(
+                WebviewBuilder::new("settings", WebviewUrl::App("settings.html".into())),
                 content_pos,
                 content_size,
-            )?;
-            // 初始落在"本地"选项卡，远端 WebView 后台预加载但不可见
-            let _ = remote.hide();
+            )?
+            .hide()?;
 
             // 统计浮窗：独立子 WebView，创建顺序在内容 WebView 之后，
             // wry 创建子窗口时置顶（HWND_TOP），因此始终浮在页面与选项卡栏之上；
@@ -225,12 +220,17 @@ pub fn run() {
             let _ = win.show();
 
             // 主题采样轮询：定时在当前活动的内容 WebView 里 eval 只读采样脚本，
-            // 由脚本读取页面计算背景色并经 report_theme 上报深浅色
+            // 由脚本读取页面计算背景色并经 report_theme 上报深浅色；
+            // 设置页是自绘页，切到设置页时保持上一次采样结果即可
             let app_theme = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(THEME_POLL_INTERVAL);
                 let tab = app_theme.state::<AppState>().active_tab.lock().unwrap().clone();
-                let label = if tab == "remote" { "remote" } else { "local" };
+                let label = match tab.as_str() {
+                    "local" => "local",
+                    "remote" => "remote",
+                    _ => continue,
+                };
                 if let Some(wv) = app_theme.get_webview(label) {
                     let _ = wv.eval(THEME_SAMPLE_JS);
                 }
@@ -240,14 +240,18 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // 托盘模式下关窗不退出：拦截关闭请求并隐藏窗口，
-            // kimi web 子进程继续运行；真正退出走托盘菜单的"退出"
+            // 关窗行为由设置决定：托盘模式仅隐藏（子进程继续跑，真正退出走托盘
+            // 菜单）；直接退出模式走 quit_app，同样保证子进程被回收
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 if *window.state::<AppState>().quitting.lock().unwrap() {
                     return;
                 }
                 api.prevent_close();
-                let _ = window.hide();
+                if window.state::<AppState>().settings.lock().unwrap().close_to_tray {
+                    let _ = window.hide();
+                } else {
+                    server::quit_app(window.app_handle());
+                }
             }
             // 子 WebView 不随窗口自动缩放，需手动按逻辑尺寸重排 bounds
             tauri::WindowEvent::Resized(_) => layout_webviews(window),

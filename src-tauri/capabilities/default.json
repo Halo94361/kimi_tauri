@@ -20,6 +20,15 @@
     "allow-stats-set-size",
     "allow-stats-set-visible",
     "allow-stats-focus-content",
-    "allow-stats-drag-start"
+    "allow-stats-drag-start",
+    "allow-stats-reset-position",
+    "allow-disconnect-remote",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-reset-settings",
+    "allow-get-diagnostics",
+    "allow-refresh-cli-info",
+    "allow-upgrade-cli",
+    "allow-open-config-target"
   ]
 }

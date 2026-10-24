@@ -51,18 +51,15 @@ fn emit_stats_mode(app: &AppHandle, docked: bool) {
     let _ = app.emit_to("stats", "stats-mode", serde_json::json!({ "docked": docked }));
 }
 
-/// 重发最近一次采样的主题：浮窗 WebView 可能晚于采样就绪，
-/// 轮询去重后不会再发，因此在恢复/显示时补一次
+/// 重发有效主题：浮窗 WebView 可能晚于采样就绪，轮询去重后不会再发，
+/// 因此在恢复/显示时补一次（固定深浅色时由设置决定，与采样无关）
 fn emit_stats_theme(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let last = state.last_theme.lock().unwrap().clone();
-    if let Some((dark, bg)) = last {
-        let _ = app.emit_to(
-            "stats",
-            "page-theme",
-            serde_json::json!({ "dark": dark, "bg": bg }),
-        );
-    }
+    let (dark, bg) = crate::window::effective_theme(app);
+    let _ = app.emit_to(
+        "stats",
+        "page-theme",
+        serde_json::json!({ "dark": dark, "bg": bg }),
+    );
 }
 
 /// 鼠标位置（物理屏幕像素）
@@ -180,24 +177,65 @@ pub(crate) fn stats_set_size(width: f64, height: f64, app: AppHandle) {
 }
 
 /// 有数据才显示统计浮窗；隐藏时只 Hide，不改几何
+/// 实际可见性 = 页面想显示 && 设置总开关 && 当前不在设置页。
+/// 页面只负责表达「想显示」，总开关与选项卡切换由这里统一收口
+pub(crate) fn apply_stats_visibility(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let visible = {
+        let g = state.stats_geom.lock().unwrap();
+        let enabled = state.settings.lock().unwrap().stats_enabled;
+        let tab = state.active_tab.lock().unwrap().clone();
+        g.visible && enabled && tab != "settings"
+    };
+    if let Some(wv) = app.get_webview("stats") {
+        let _ = if visible { wv.show() } else { wv.hide() };
+    }
+    if visible {
+        let g = state.stats_geom.lock().unwrap().clone();
+        apply_stats_geom(app, &g);
+        emit_stats_theme(app);
+    }
+}
+
+/// 有数据才显示统计浮窗；隐藏时只记录意愿，不改几何
 #[tauri::command]
 pub(crate) fn stats_set_visible(visible: bool, app: AppHandle) {
-    let state = app.state::<AppState>();
     {
+        let state = app.state::<AppState>();
         let mut g = state.stats_geom.lock().unwrap();
         if g.visible == visible {
             return;
         }
         g.visible = visible;
     }
-    if let Some(wv) = app.get_webview("stats") {
-        let _ = if visible { wv.show() } else { wv.hide() };
+    apply_stats_visibility(&app);
+}
+
+/// 恢复浮窗默认位置：悬浮、展开、右上角；页面保存的几何经 stats-reset 事件清除
+#[tauri::command]
+pub(crate) fn stats_reset_position(app: AppHandle) {
+    let Some(win) = app.get_window("main") else {
+        return;
+    };
+    let (win_w, win_h) = window_logical_size(&win);
+    if win.is_minimized().unwrap_or(false) || win_w <= 0.0 || win_h <= 0.0 {
+        return;
     }
-    if visible {
-        let g = state.stats_geom.lock().unwrap().clone();
-        apply_stats_geom(&app, &g);
-        emit_stats_theme(&app);
-    }
+    let state = app.state::<AppState>();
+    let g = {
+        let mut g = state.stats_geom.lock().unwrap();
+        g.docked = false;
+        g.folded = false;
+        g.w = STATS_WIDTH;
+        g.h = STATS_BAR_HEIGHT;
+        g.x = win_w - STATS_WIDTH - 12.0;
+        g.y = TABBAR_HEIGHT + 12.0;
+        clamp_stats_geom(&mut g, win_w, win_h);
+        g.clone()
+    };
+    apply_stats_geom(&app, &g);
+    emit_stats_mode(&app, false);
+    let _ = app.emit_to("stats", "stats-reset", serde_json::json!({}));
 }
 
 /// 点击/拖动统计浮窗后把键盘焦点还给内容页

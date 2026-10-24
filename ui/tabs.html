@@ -79,6 +79,7 @@
       color: var(--fg-active);
       border-bottom-color: var(--accent);
     }
+    .tab[hidden] { display: none; }
     /* 选项卡栏状态提示条（远程控制 / OpenCode 代理）：失败时给重试按钮 */
     .remote-chip,
     .proxy-chip {
@@ -130,6 +131,7 @@
   <div class="bar">
     <div class="tab active" data-tab="local">本地</div>
     <div class="tab" data-tab="remote">远端</div>
+    <div class="tab" data-tab="settings">设置</div>
     <div class="remote-chip" id="remote-chip" hidden>
       <span class="remote-text" id="remote-text"></span>
       <button class="remote-retry" id="remote-retry" hidden>重试</button>
@@ -154,6 +156,14 @@
     window.__TAURI__.event.listen("theme-changed", e => {
       document.documentElement.dataset.theme = e.payload;
     });
+
+    // 「远端」选项卡按设置显隐：初始拉取一次，之后跟随设置变更
+    const remoteTab = document.querySelector('.tab[data-tab="remote"]');
+    function applySettings(s) {
+      if (s) remoteTab.hidden = s.show_remote_tab === false;
+    }
+    window.__TAURI__.event.listen("settings-changed", e => applySettings(e.payload));
+    window.__TAURI__.core.invoke("get_settings").then(applySettings).catch(() => {});
 
     // 远程控制状态：连接中/失败时显示提示；失败附原因（hover）与重试按钮
     const remoteChip = document.getElementById("remote-chip");

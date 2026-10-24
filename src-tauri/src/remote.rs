@@ -38,6 +38,21 @@ pub(crate) fn retry_remote(app: AppHandle) {
     start_enable(&app);
 }
 
+/// 设置页手动断开：状态回到 Idle（巡检线程随之退出），后台发 disable 打断
+/// CLI 的 starting/on；与「下次启动是否自动开启」的设置无关
+#[tauri::command]
+pub(crate) fn disconnect_remote(app: AppHandle) {
+    let state = app.state::<AppState>();
+    let gen = state.server_gen.load(Ordering::SeqCst);
+    let endpoint = state.endpoint.lock().unwrap().clone();
+    set_status(&app, gen, RemotePhase::Idle, String::new(), None);
+    if let Some(ep) = endpoint {
+        std::thread::spawn(move || {
+            let _ = request(&ep, "POST", Some(r#"{"enabled":false}"#), REQUEST_TIMEOUT);
+        });
+    }
+}
+
 fn phase_name(phase: RemotePhase) -> &'static str {
     match phase {
         RemotePhase::Idle => "idle",
@@ -47,7 +62,7 @@ fn phase_name(phase: RemotePhase) -> &'static str {
     }
 }
 
-fn status_payload(status: &RemoteStatus) -> serde_json::Value {
+pub(crate) fn status_payload(status: &RemoteStatus) -> serde_json::Value {
     serde_json::json!({
         "state": phase_name(status.phase),
         "reason": status.reason,

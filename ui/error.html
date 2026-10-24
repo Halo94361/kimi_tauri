@@ -65,5 +65,19 @@
       window.__TAURI__.core.invoke("restart_server");
     });
   </script>
+  <script>
+    // 壳主题（跟随页面/固定深浅色）由 Rust 广播；未收到前按系统主题兜底
+    (function () {
+      function apply(theme) {
+        var dark = theme ? theme !== "light" : !matchMedia("(prefers-color-scheme: light)").matches;
+        document.body.style.background = dark ? "#1a1a1e" : "#ffffff";
+        document.body.style.color = dark ? "#d4d4d8" : "#111827";
+        var hint = document.querySelector(".reason");
+        if (hint) hint.style.color = dark ? "#a1a1aa" : "#6b7280";
+      }
+      apply(null);
+      window.__TAURI__.event.listen("theme-changed", function (e) { apply(e.payload); });
+    })();
+  </script>
 </body>
 </html>

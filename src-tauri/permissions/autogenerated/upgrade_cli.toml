@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-upgrade-cli"
+description = "Enables the upgrade_cli command without any pre-configured scope."
+commands.allow = ["upgrade_cli"]
+
+[[permission]]
+identifier = "deny-upgrade-cli"
+description = "Denies the upgrade_cli command without any pre-configured scope."
+commands.deny = ["upgrade_cli"]

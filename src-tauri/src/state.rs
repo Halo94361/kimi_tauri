@@ -42,6 +42,10 @@ pub(crate) struct AppState {
     pub(crate) endpoint: Mutex<Option<LocalEndpoint>>,
     /// 远程控制隧道状态（选项卡栏提示与重试按钮的数据源）
     pub(crate) remote: Mutex<RemoteStatus>,
+    /// 壳自身设置（settings.rs 持久化；启动时从 settings.json 读入）
+    pub(crate) settings: Mutex<crate::settings::Settings>,
+    /// CLI 升级任务占用标记：同时只允许一个，进行中禁止重复触发
+    pub(crate) upgrading: Mutex<bool>,
 }
 
 /// 远程控制隧道的阶段，与 kimi web 的 `data.state`（off/starting/on）对应

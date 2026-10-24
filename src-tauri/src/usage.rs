@@ -15,7 +15,7 @@ pub(crate) fn report_session(session_id: String, state: tauri::State<AppState>) 
 }
 
 /// Kimi Code 数据根目录：优先 KIMI_CODE_HOME，默认 ~/.kimi-code
-fn kimi_code_home() -> Option<PathBuf> {
+pub(crate) fn kimi_code_home() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("KIMI_CODE_HOME") {
         if !p.is_empty() {
             return Some(PathBuf::from(p));

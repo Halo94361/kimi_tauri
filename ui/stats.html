@@ -388,6 +388,17 @@
         // 窗口变回大尺寸时才能恢复展开面板
         requestSize(true);
       }));
+      listens.push(listen("stats-reset", function () {
+        // 设置页「恢复默认位置」：Rust 已复位几何，这里清掉页面持久化
+        // 并恢复悬浮/展开显示（pin 保留，它不属于位置信息）
+        localStorage.removeItem(POS_KEY);
+        docked = false;
+        folded = false;
+        open = false;
+        detail.style.display = "none";
+        document.body.classList.remove("docked");
+        applyFold();
+      }));
 
       /* ---------- 启动：监听就绪后恢复几何，等首个数据到达再显示 ---------- */
       function restoreGeometry() {

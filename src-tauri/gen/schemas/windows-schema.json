@@ -351,16 +351,46 @@
           "markdownDescription": "Enables the daily_stats command without any pre-configured scope."
         },
         {
+          "description": "Enables the disconnect_remote command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-disconnect-remote",
+          "markdownDescription": "Enables the disconnect_remote command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-diagnostics",
+          "markdownDescription": "Enables the get_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-settings",
+          "markdownDescription": "Enables the get_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the last_error command without any pre-configured scope.",
           "type": "string",
           "const": "allow-last-error",
           "markdownDescription": "Enables the last_error command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_config_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-config-target",
+          "markdownDescription": "Enables the open_config_target command without any pre-configured scope."
+        },
+        {
           "description": "Enables the proxy_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-proxy-status",
           "markdownDescription": "Enables the proxy_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the refresh_cli_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-refresh-cli-info",
+          "markdownDescription": "Enables the refresh_cli_info command without any pre-configured scope."
         },
         {
           "description": "Enables the remote_status command without any pre-configured scope.",
@@ -379,6 +409,12 @@
           "type": "string",
           "const": "allow-report-theme",
           "markdownDescription": "Enables the report_theme command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reset_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-reset-settings",
+          "markdownDescription": "Enables the reset_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the restart_server command without any pre-configured scope.",
@@ -405,6 +441,12 @@
           "markdownDescription": "Enables the session_stats command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-settings",
+          "markdownDescription": "Enables the set_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the show_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-show-window",
@@ -421,6 +463,12 @@
           "type": "string",
           "const": "allow-stats-focus-content",
           "markdownDescription": "Enables the stats_focus_content command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stats_reset_position command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-stats-reset-position",
+          "markdownDescription": "Enables the stats_reset_position command without any pre-configured scope."
         },
         {
           "description": "Enables the stats_restore command without any pre-configured scope.",
@@ -447,10 +495,34 @@
           "markdownDescription": "Enables the switch_tab command without any pre-configured scope."
         },
         {
+          "description": "Enables the upgrade_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-upgrade-cli",
+          "markdownDescription": "Enables the upgrade_cli command without any pre-configured scope."
+        },
+        {
           "description": "Denies the daily_stats command without any pre-configured scope.",
           "type": "string",
           "const": "deny-daily-stats",
           "markdownDescription": "Denies the daily_stats command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disconnect_remote command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-disconnect-remote",
+          "markdownDescription": "Denies the disconnect_remote command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-diagnostics",
+          "markdownDescription": "Denies the get_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-settings",
+          "markdownDescription": "Denies the get_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the last_error command without any pre-configured scope.",
@@ -459,10 +531,22 @@
           "markdownDescription": "Denies the last_error command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_config_target command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-config-target",
+          "markdownDescription": "Denies the open_config_target command without any pre-configured scope."
+        },
+        {
           "description": "Denies the proxy_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-proxy-status",
           "markdownDescription": "Denies the proxy_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the refresh_cli_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-refresh-cli-info",
+          "markdownDescription": "Denies the refresh_cli_info command without any pre-configured scope."
         },
         {
           "description": "Denies the remote_status command without any pre-configured scope.",
@@ -481,6 +565,12 @@
           "type": "string",
           "const": "deny-report-theme",
           "markdownDescription": "Denies the report_theme command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reset_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-reset-settings",
+          "markdownDescription": "Denies the reset_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the restart_server command without any pre-configured scope.",
@@ -507,6 +597,12 @@
           "markdownDescription": "Denies the session_stats command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-settings",
+          "markdownDescription": "Denies the set_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the show_window command without any pre-configured scope.",
           "type": "string",
           "const": "deny-show-window",
@@ -523,6 +619,12 @@
           "type": "string",
           "const": "deny-stats-focus-content",
           "markdownDescription": "Denies the stats_focus_content command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stats_reset_position command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-stats-reset-position",
+          "markdownDescription": "Denies the stats_reset_position command without any pre-configured scope."
         },
         {
           "description": "Denies the stats_restore command without any pre-configured scope.",
@@ -547,6 +649,12 @@
           "type": "string",
           "const": "deny-switch-tab",
           "markdownDescription": "Denies the switch_tab command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the upgrade_cli command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-upgrade-cli",
+          "markdownDescription": "Denies the upgrade_cli command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

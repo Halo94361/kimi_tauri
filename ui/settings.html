@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kimi Code - 设置</title>
+  <style>
+    /* 更纱黑体等宽子集：与其它自绘页面共用，不依赖系统是否安装字体 */
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }
+    :root {
+      --bg: #1a1a1e;
+      --panel: #212126;
+      --fg: #d4d4d8;
+      --muted: #a1a1aa;
+      --divider: rgba(255, 255, 255, 0.08);
+      --accent: #1a88ff;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f7f7f8;
+        --panel: #ffffff;
+        --fg: #111827;
+        --muted: #6b7280;
+        --divider: rgba(0, 0, 0, 0.08);
+        --accent: #1783ff;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #1a1a1e;
+      --panel: #212126;
+      --fg: #d4d4d8;
+      --muted: #a1a1aa;
+      --divider: rgba(255, 255, 255, 0.08);
+      --accent: #1a88ff;
+    }
+    :root[data-theme="light"] {
+      --bg: #f7f7f8;
+      --panel: #ffffff;
+      --fg: #111827;
+      --muted: #6b7280;
+      --divider: rgba(0, 0, 0, 0.08);
+      --accent: #1783ff;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font: 13px/1.6 "SarasaMonoSC", "Sarasa Mono SC", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
+    }
+    body { overflow-y: auto; }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 18px 24px 40px; }
+    h1 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--divider);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 14px;
+    }
+    h2 { font-size: 13px; margin: 0 0 10px; font-weight: 600; color: var(--fg); }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 5px 0;
+    }
+    .row > .label { flex: none; }
+    .grow { flex: 1; min-width: 0; }
+    .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; user-select: text; }
+    input[type="text"], input[type="number"], select {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--divider);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    input[type="text"] { width: 100%; }
+    input[type="number"] { width: 110px; }
+    input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; margin: 0; }
+    label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 5px 0; }
+    button {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--divider);
+      border-radius: 6px;
+      padding: 5px 14px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .kv { display: flex; gap: 12px; padding: 3px 0; }
+    .kv > span:first-child { flex: none; width: 88px; color: var(--muted); }
+    .kv > span:last-child { min-width: 0; word-break: break-all; user-select: text; }
+    .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    #upgradeMsg { color: var(--muted); margin-top: 8px; white-space: pre-wrap; word-break: break-all; user-select: text; }
+    #upgradeMsg.failed { color: #f47174; }
+    #toast {
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      max-width: 80%;
+      background: var(--panel);
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 12px;
+      z-index: 20;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+    }
+    #overlay[hidden], #toast[hidden] { display: none; }
+    .modal {
+      width: 380px;
+      max-width: 86%;
+      background: var(--panel);
+      border: 1px solid var(--divider);
+      border-radius: 10px;
+      padding: 18px;
+    }
+    #confirmText { white-space: pre-wrap; user-select: text; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>设置</h1>
+
+    <section>
+      <h2>远程控制（rc 隧道）</h2>
+      <label class="check"><input type="checkbox" id="remote_auto_connect" />启动时自动开启远程控制</label>
+      <p class="hint">只影响下次启动，不会改变当前连接状态。没有 Kimi Code 订阅、连不上 rc 服务器时建议关闭，不再出现失败提示。</p>
+      <div class="row" style="margin-top:8px">
+        <span class="label">当前状态</span><span id="remoteState" class="grow">-</span>
+        <button id="rcConnect">连接</button>
+        <button id="rcDisconnect">断开</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>远端选项卡</h2>
+      <label class="check"><input type="checkbox" id="show_remote_tab" />显示「远端」选项卡</label>
+      <p class="hint">远端选项卡是 code-rc.kimi.com 托管网页，与上面的 rc 隧道无关。关闭后立即隐藏选项卡，重新开启时重新加载。</p>
+    </section>
+
+    <section>
+      <h2>本地服务（kimi web）</h2>
+      <div class="row"><span class="label">kimi 路径</span>
+        <input type="text" id="kimi_path" class="grow" placeholder="留空自动查找（PATH → 默认安装目录）" />
+      </div>
+      <div class="row"><span class="label">本地端口</span>
+        <input type="number" id="kimi_port" min="0" max="65535" step="1" />
+        <span class="hint" style="margin:0">0 = 首选 58627，被占用时自动回退</span>
+      </div>
+      <p class="hint">路径与端口在重启本地服务后生效。注意：换端口会重置 kimi web 页面自身的设置（localStorage 按源隔离）；指定固定端口被占用时 CLI 会自动 +1。</p>
+      <div class="btns"><button id="restartServer">重启本地服务</button></div>
+    </section>
+
+    <section>
+      <h2>OpenCode Go 代理</h2>
+      <div class="row"><span class="label">启动策略</span>
+        <select id="proxy_mode">
+          <option value="auto">自动（仅 CLI 配置指向代理时启动）</option>
+          <option value="always">始终启动</option>
+          <option value="off">关闭</option>
+        </select>
+      </div>
+      <p class="hint">代理监听 127.0.0.1:58787，为 OpenCode Go 注入会话头；不使用它时可保持自动，不会多起进程。</p>
+      <div class="row"><span class="label">当前状态</span><span id="proxyState" class="grow">-</span></div>
+    </section>
+
+    <section>
+      <h2>窗口与外观</h2>
+      <div class="row"><span class="label">关闭窗口</span>
+        <select id="close_to_tray">
+          <option value="tray">隐藏到托盘（服务继续运行）</option>
+          <option value="exit">直接退出（结束服务）</option>
+        </select>
+      </div>
+      <div class="row"><span class="label">壳主题</span>
+        <select id="theme">
+          <option value="follow">跟随内容页</option>
+          <option value="dark">固定深色</option>
+          <option value="light">固定浅色</option>
+        </select>
+      </div>
+      <p class="hint">主题只作用于选项卡栏、统计浮窗与设置页等壳自绘页面；kimi web 页面主题由它自己管理。</p>
+      <label class="check"><input type="checkbox" id="notifications" />允许页面桌面通知</label>
+    </section>
+
+    <section>
+      <h2>统计浮窗</h2>
+      <label class="check"><input type="checkbox" id="stats_enabled" />显示用量统计浮窗</label>
+      <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。</p>
+      <div class="btns"><button id="resetStats">恢复默认位置</button></div>
+    </section>
+
+    <section>
+      <h2>状态与诊断</h2>
+      <div class="kv"><span>壳版本</span><span id="appVersion">-</span></div>
+      <div class="kv"><span>本地服务</span><span id="serverState">-</span></div>
+      <div class="kv"><span>CLI 版本</span><span id="cliVersion">读取中…</span></div>
+      <div class="kv"><span>最新版本</span><span id="cliLatest">-</span></div>
+      <div class="btns">
+        <button id="refreshInfo">刷新版本信息</button>
+        <button id="upgrade" class="primary">立即升级 CLI</button>
+      </div>
+      <p class="hint">最新版本来自 CLI 自动更新机制的检查记录；「立即升级」会获取并安装最新版，需二次确认，完成后自动重启本地服务。</p>
+      <div id="upgradeMsg" hidden></div>
+      <div class="btns">
+        <button data-open="cli_dir">打开 CLI 配置目录</button>
+        <button data-open="cli_config">打开 config.toml</button>
+        <button data-open="shell_dir">打开壳设置目录</button>
+      </div>
+      <div class="btns">
+        <button id="copyDiag">复制诊断信息</button>
+        <button id="resetSettings">恢复默认设置</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" hidden></div>
+  <div id="overlay" hidden>
+    <div class="modal">
+      <div id="confirmText"></div>
+      <div class="modal-actions">
+        <button id="confirmCancel">取消</button>
+        <button id="confirmOk" class="primary">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const invoke = window.__TAURI__.core.invoke;
+      const listen = window.__TAURI__.event.listen;
+      const $ = id => document.getElementById(id);
+
+      /* ---------- 提示与确认弹层 ---------- */
+      let toastTimer = 0;
+      function toast(msg) {
+        const t = $("toast");
+        t.textContent = msg;
+        t.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { t.hidden = true; }, 5000);
+      }
+      let confirmResolve = null;
+      function confirmBox(text) {
+        $("confirmText").textContent = text;
+        $("overlay").hidden = false;
+        return new Promise(resolve => { confirmResolve = resolve; });
+      }
+      function settleConfirm(v) {
+        $("overlay").hidden = true;
+        if (confirmResolve) { confirmResolve(v); confirmResolve = null; }
+      }
+      $("confirmOk").addEventListener("click", () => settleConfirm(true));
+      $("confirmCancel").addEventListener("click", () => settleConfirm(false));
+
+      /* ---------- 设置读写 ---------- */
+      const CHECKS = ["remote_auto_connect", "show_remote_tab", "notifications", "stats_enabled"];
+      const SELECTS = ["proxy_mode", "theme"];
+      function readForm() {
+        const s = {
+          remote_auto_connect: $("remote_auto_connect").checked,
+          show_remote_tab: $("show_remote_tab").checked,
+          notifications: $("notifications").checked,
+          stats_enabled: $("stats_enabled").checked,
+          proxy_mode: $("proxy_mode").value,
+          theme: $("theme").value,
+          close_to_tray: $("close_to_tray").value === "tray",
+          kimi_path: $("kimi_path").value.trim(),
+          kimi_port: Math.max(0, Math.min(65535, parseInt($("kimi_port").value, 10) || 0))
+        };
+        return s;
+      }
+      function fillForm(s) {
+        if (!s) return;
+        CHECKS.forEach(k => { $(k).checked = s[k] !== false; });
+        SELECTS.forEach(k => { $(k).value = s[k]; });
+        $("close_to_tray").value = s.close_to_tray === false ? "exit" : "tray";
+        // 正在编辑的输入框不被后台事件覆盖
+        if (document.activeElement !== $("kimi_path")) $("kimi_path").value = s.kimi_path || "";
+        if (document.activeElement !== $("kimi_port")) $("kimi_port").value = s.kimi_port || 0;
+        renderProxyMode(s.proxy_mode);
+      }
+      async function save() {
+        try { await invoke("set_settings", { settings: readForm() }); }
+        catch (e) { toast("保存失败：" + e); }
+      }
+      CHECKS.forEach(k => $(k).addEventListener("change", save));
+      SELECTS.forEach(k => $(k).addEventListener("change", save));
+      $("close_to_tray").addEventListener("change", save);
+      $("kimi_path").addEventListener("change", save);
+      $("kimi_port").addEventListener("change", save);
+
+      /* ---------- 诊断状态 ---------- */
+      let diag = null;
+      let proxyMode = "auto";
+      function renderProxyMode(mode) { proxyMode = mode || "auto"; renderProxy(); }
+      function remoteText(r) {
+        if (!r) return "-";
+        switch (r.state) {
+          case "connected": return "已连接";
+          case "connecting": return "连接中…";
+          case "failed": return "失败：" + (r.reason || "未知原因");
+          default: return "未开启";
+        }
+      }
+      function renderProxy() {
+        const p = diag && diag.proxy;
+        let text;
+        if (p && p.failed) text = "失败：" + p.reason;
+        else if (p && p.running) text = "运行中（127.0.0.1:58787）";
+        else if (proxyMode === "off") text = "已关闭";
+        else text = "未启动";
+        $("proxyState").textContent = text;
+      }
+      function renderDiag(d) {
+        diag = d;
+        $("appVersion").textContent = d.app_version || "-";
+        $("serverState").textContent = d.server_ready
+          ? "运行中（端口 " + (d.port || "?") + "）"
+          : "未就绪";
+        $("remoteState").textContent = remoteText(d.remote);
+        $("upgrade").disabled = !!d.upgrading;
+        renderProxy();
+      }
+      function pollDiag() {
+        invoke("get_diagnostics").then(renderDiag).catch(() => {});
+      }
+
+      /* ---------- 版本与升级 ---------- */
+      let cliInfo = {};
+      function renderCliInfo(info) {
+        cliInfo = info || {};
+        $("cliVersion").textContent = cliInfo.version || (cliInfo.error ? "读取失败：" + cliInfo.error : "未找到 CLI");
+        let latest = cliInfo.latest ? cliInfo.latest : "暂无更新信息";
+        if (cliInfo.checked_at) latest += "（检查于 " + cliInfo.checked_at + "）";
+        if (cliInfo.version && cliInfo.latest && cliInfo.version !== cliInfo.latest) latest += "，可更新";
+        $("cliLatest").textContent = latest;
+      }
+      $("refreshInfo").addEventListener("click", () => {
+        $("cliVersion").textContent = "读取中…";
+        invoke("refresh_cli_info").catch(e => toast(String(e)));
+      });
+      $("upgrade").addEventListener("click", async () => {
+        const ok = await confirmBox(
+          "升级会下载并安装最新版 CLI，完成后自动重启本地服务。\n\n" +
+          "当前对话会被打断，未发送的输入会丢失。确定继续吗？"
+        );
+        if (!ok) return;
+        const msg = $("upgradeMsg");
+        msg.hidden = false;
+        msg.className = "";
+        msg.textContent = "正在启动升级…";
+        try { await invoke("upgrade_cli"); }
+        catch (e) { msg.className = "failed"; msg.textContent = String(e); }
+      });
+
+      /* ---------- 各按钮 ---------- */
+      $("rcConnect").addEventListener("click", () => {
+        invoke("retry_remote").then(() => setTimeout(pollDiag, 300)).catch(e => toast(String(e)));
+      });
+      $("rcDisconnect").addEventListener("click", () => {
+        invoke("disconnect_remote").then(() => setTimeout(pollDiag, 300)).catch(e => toast(String(e)));
+      });
+      $("restartServer").addEventListener("click", async () => {
+        const ok = await confirmBox("重启本地服务会打断当前对话，未发送的输入会丢失。确定重启吗？");
+        if (!ok) return;
+        invoke("restart_server").catch(e => toast(String(e)));
+        toast("正在重启本地服务");
+      });
+      $("resetStats").addEventListener("click", () => {
+        invoke("stats_reset_position").catch(e => toast(String(e)));
+        toast("统计浮窗已恢复默认位置");
+      });
+      document.querySelectorAll("[data-open]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          invoke("open_config_target", { target: btn.dataset.open }).catch(e => toast(String(e)));
+        });
+      });
+      $("resetSettings").addEventListener("click", async () => {
+        const ok = await confirmBox("恢复全部默认设置？kimi 路径与端口也会清空，重启本地服务后生效。");
+        if (!ok) return;
+        try {
+          const s = await invoke("reset_settings");
+          fillForm(s);
+          toast("已恢复默认设置");
+        } catch (e) { toast("恢复失败：" + e); }
+      });
+      $("copyDiag").addEventListener("click", () => {
+        const s = readForm();
+        const text = [
+          "壳版本: " + (diag ? diag.app_version : "-"),
+          "CLI 版本: " + (cliInfo.version || "-"),
+          "最新版本: " + (cliInfo.latest || "-"),
+          "本地服务: " + $("serverState").textContent,
+          "远程控制: " + $("remoteState").textContent,
+          "代理: " + $("proxyState").textContent,
+          "设置: " + JSON.stringify(s)
+        ].join("\n");
+        function fallback() {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); toast("诊断信息已复制"); }
+          catch (e) { toast("复制失败，请手动选择复制"); }
+          document.body.removeChild(ta);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(() => toast("诊断信息已复制")).catch(fallback);
+        } else fallback();
+      });
+
+      /* ---------- 事件 ---------- */
+      listen("settings-changed", e => fillForm(e.payload));
+      listen("theme-changed", e => { document.documentElement.dataset.theme = e.payload; });
+      listen("cli-info", e => renderCliInfo(e.payload));
+      listen("cli-upgrade", e => {
+        const p = e.payload || {};
+        const msg = $("upgradeMsg");
+        msg.hidden = false;
+        msg.className = p.stage === "failed" ? "failed" : "";
+        msg.textContent = p.message || "";
+        pollDiag();
+      });
+
+      /* ---------- 初始化：先注册监听，再拉取状态 ---------- */
+      invoke("get_settings").then(fillForm).catch(e => toast(String(e)));
+      pollDiag();
+      setInterval(pollDiag, 3000);
+      invoke("refresh_cli_info").catch(() => {});
+    })();
+  </script>
+</body>
+</html>

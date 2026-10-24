@@ -9,6 +9,7 @@ use std::time::Duration;
 use regex::Regex;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::settings::{ProxyMode, Settings};
 use crate::state::{AppState, LocalEndpoint};
 use crate::window::{show_main_window, switch_to_tab};
 
@@ -16,12 +17,16 @@ const KIMI_PORT: u16 = 58627;
 const PROXY_PORT: u16 = 58787;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 选定 kimi web 监听端口：首选固定端口，被占用时让系统分配空闲端口。
+/// 选定 kimi web 监听端口：设置指定固定端口时直接交给 CLI（被占用会由 CLI 自行 +1，
+/// 实际端口以 stdout 解析为准）；否则首选固定端口，被占用时让系统分配空闲端口。
 /// 端口在 spawn 前选定并传入 --port，保证传入端口与实际监听端口一致；
 /// stdout 正则解析仅作确认。drop 监听到 kimi 绑定之间有极小竞争窗口，
 /// 最坏结果退化为启动失败进错误页，可接受
-fn pick_port() -> u16 {
+fn pick_port(configured: u16) -> u16 {
     use std::net::TcpListener;
+    if configured != 0 {
+        return configured;
+    }
     if TcpListener::bind(("127.0.0.1", KIMI_PORT)).is_ok() {
         return KIMI_PORT;
     }
@@ -31,13 +36,22 @@ fn pick_port() -> u16 {
         .unwrap_or(KIMI_PORT)
 }
 
-/// 依次尝试 PATH 上的 kimi 与已知的 native 安装路径
-fn spawn_kimi() -> Result<Child, String> {
+/// kimi 可执行文件候选：设置里手动指定时只用该路径（失败直接报错，不静默换路径），
+/// 否则依次尝试 PATH 上的 kimi 与已知的 native 安装路径
+pub(crate) fn kimi_candidates(settings: &Settings) -> Vec<String> {
+    if !settings.kimi_path.is_empty() {
+        return vec![settings.kimi_path.clone()];
+    }
     let mut candidates: Vec<String> = vec!["kimi".into()];
     if let Ok(home) = std::env::var("USERPROFILE") {
         candidates.push(format!(r"{home}\.kimi-code\bin\kimi.exe"));
     }
-    let port = pick_port();
+    candidates
+}
+
+fn spawn_kimi(settings: &Settings) -> Result<Child, String> {
+    let candidates = kimi_candidates(settings);
+    let port = pick_port(settings.kimi_port);
     let mut last_err = String::new();
     for cand in &candidates {
         let mut cmd = Command::new(cand);
@@ -103,16 +117,24 @@ fn proxy_health() -> ProxyHealth {
     }
 }
 
-/// 配置里是否真的把某个 provider 指向了本代理。
-/// 只有此时失败才打扰用户，避免未使用 OpenCode Go 的人被提示
+/// 配置里是否真的把某个 provider 指向了本代理
 fn proxy_required() -> bool {
-    let Ok(home) = std::env::var("USERPROFILE") else {
+    let Some(home) = crate::usage::kimi_code_home() else {
         return false;
     };
-    let path = PathBuf::from(home).join(".kimi-code").join("config.toml");
-    std::fs::read_to_string(path)
+    std::fs::read_to_string(home.join("config.toml"))
         .map(|text| text.contains("127.0.0.1:58787") || text.contains("localhost:58787"))
         .unwrap_or(false)
+}
+
+/// 代理启动策略：自动 = 只有 CLI 配置指向本代理才启动（不用 OpenCode Go 时
+/// 不多起一个进程）；始终 = 无条件启动；关闭 = 不启动也不提示
+fn proxy_enabled(settings: &Settings) -> bool {
+    match settings.proxy_mode {
+        ProxyMode::Off => false,
+        ProxyMode::Always => true,
+        ProxyMode::Auto => proxy_required(),
+    }
 }
 
 fn set_proxy_error(app: &AppHandle, reason: Option<String>) {
@@ -216,9 +238,10 @@ fn start_proxy(app: &AppHandle) -> Result<(), String> {
     ))
 }
 
-/// 只有配置确实指向代理时才提示，否则清掉旧提示
+/// 只有代理模式确实要求启动时才提示，否则清掉旧提示
 fn report_proxy_failure(app: &AppHandle, reason: String) -> String {
-    if proxy_required() {
+    let enabled = proxy_enabled(&app.state::<AppState>().settings.lock().unwrap());
+    if enabled {
         set_proxy_error(app, Some(reason.clone()));
     } else {
         set_proxy_error(app, None);
@@ -310,11 +333,17 @@ pub(crate) fn start_server(app: &AppHandle) {
     };
     crate::remote::reset(app, gen);
 
-    // 先拉起可选代理：kimi 从启动到首次模型请求还有 UI 初始化时间。
-    // 失败不阻塞 kimi，原因经 proxy-status 事件显示在选项卡栏
-    let _ = start_proxy(app);
+    let settings = app.state::<AppState>().settings.lock().unwrap().clone();
 
-    let mut child = match spawn_kimi() {
+    // 按代理模式决定是否拉起：kimi 从启动到首次模型请求还有 UI 初始化时间。
+    // 失败不阻塞 kimi，原因经 proxy-status 事件显示在选项卡栏
+    if proxy_enabled(&settings) {
+        let _ = start_proxy(app);
+    } else {
+        set_proxy_error(app, None);
+    }
+
+    let mut child = match spawn_kimi(&settings) {
         Ok(c) => c,
         Err(e) => {
             show_error(app, &e);
@@ -387,8 +416,18 @@ pub(crate) fn start_server(app: &AppHandle) {
                     }
                     *state.ready.lock().unwrap() = true;
                     navigate_local(&app_reader, &format!("http://127.0.0.1:{p}/#token={t}"));
-                    // 本地界面已可用，后台开远程隧道（失败只提示，不阻塞本地）
-                    crate::remote::start_enable(&app_reader);
+                    // 本地界面已可用，后台开远程隧道（失败只提示，不阻塞本地）；
+                    // 设置关闭自动开启时保持 Idle，选项卡栏不出现提示条，
+                    // 已建立的旧隧道已被本次重启随子进程一并回收
+                    if app_reader
+                        .state::<AppState>()
+                        .settings
+                        .lock()
+                        .unwrap()
+                        .remote_auto_connect
+                    {
+                        crate::remote::start_enable(&app_reader);
+                    }
                     navigated = true;
                 }
             }
@@ -450,4 +489,22 @@ pub(crate) fn proxy_status(state: tauri::State<AppState>) -> serde_json::Value {
 #[tauri::command]
 pub(crate) fn retry_proxy(app: AppHandle) {
     let _ = start_proxy(&app);
+}
+
+/// 代理模式变更的即时副作用：需要启动则后台拉起（健康检查最多等 3s，不能
+/// 阻塞命令），不再需要则停掉自己拉起的子进程并清掉提示
+pub(crate) fn apply_settings(app: &AppHandle, prev: &Settings, next: &Settings) {
+    if prev.proxy_mode == next.proxy_mode {
+        return;
+    }
+    if proxy_enabled(next) {
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            let _ = start_proxy(&app2);
+        });
+    } else {
+        let state = app.state::<AppState>();
+        kill_proxy(&state);
+        set_proxy_error(app, None);
+    }
 }

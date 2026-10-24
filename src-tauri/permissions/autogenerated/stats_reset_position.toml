@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stats-reset-position"
+description = "Enables the stats_reset_position command without any pre-configured scope."
+commands.allow = ["stats_reset_position"]
+
+[[permission]]
+identifier = "deny-stats-reset-position"
+description = "Denies the stats_reset_position command without any pre-configured scope."
+commands.deny = ["stats_reset_position"]

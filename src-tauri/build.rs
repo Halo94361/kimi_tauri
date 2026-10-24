@@ -27,6 +27,15 @@ fn main() {
             "stats_set_visible",
             "stats_focus_content",
             "stats_drag_start",
+            "stats_reset_position",
+            "disconnect_remote",
+            "get_settings",
+            "set_settings",
+            "reset_settings",
+            "get_diagnostics",
+            "refresh_cli_info",
+            "upgrade_cli",
+            "open_config_target",
         ]),
     );
     tauri_build::try_build(attributes).expect("failed to run tauri-build");

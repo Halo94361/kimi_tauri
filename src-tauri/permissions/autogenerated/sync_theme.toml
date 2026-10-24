@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sync-theme"
+description = "Enables the sync_theme command without any pre-configured scope."
+commands.allow = ["sync_theme"]
+
+[[permission]]
+identifier = "deny-sync-theme"
+description = "Denies the sync_theme command without any pre-configured scope."
+commands.deny = ["sync_theme"]

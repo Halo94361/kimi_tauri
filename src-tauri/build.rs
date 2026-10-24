@@ -22,6 +22,7 @@ fn main() {
             "weekly_stats",
             "switch_tab",
             "report_theme",
+            "sync_theme",
             "report_session",
             "stats_restore",
             "stats_set_size",

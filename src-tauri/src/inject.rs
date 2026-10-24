@@ -1,31 +1,49 @@
 //! 注入各 WebView 的 JS 脚本常量
 
-/// 主题采样脚本（由 Rust 定时 eval 进当前活动的内容 WebView）：
-/// 依次检查 body / html / body 首子元素的计算背景色，取第一个非透明色
-/// 按 Rec.601 亮度判断深浅，同时把该颜色上报给统计浮窗做底色
-/// （跨 WebView 无法毛玻璃，只能靠同色基底消除圆角处的色差）；
-/// 全部透明时回退到系统主题。结果经 report_theme 上报，Rust 侧去重后转发
+/// 内容页主题采样：初始化、切卡与 Rust 轮询时同步读取计算样式并立即上报；
+/// 不依赖 requestAnimationFrame，后台或无重绘的 WebView 也能按轮询刷新
 pub(crate) const THEME_SAMPLE_JS: &str = r#"(function () {
   try {
     var T = window.__TAURI__; if (!T) return;
-    var els = [document.body, document.documentElement];
-    if (document.body && document.body.firstElementChild) els.push(document.body.firstElementChild);
-    var dark = null, bg = null;
-    for (var i = 0; i < els.length; i++) {
-      if (!els[i]) continue;
-      var c = getComputedStyle(els[i]).backgroundColor;
-      var m = c && c.match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?\s*\)/);
-      if (!m) continue;
-      var a = m[4] === undefined ? 1 : parseFloat(m[4]);
-      if (a < 0.5) continue;
-      dark = (0.299 * m[1] + 0.587 * m[2] + 0.114 * m[3]) < 128;
-      bg = "rgb(" + m[1] + "," + m[2] + "," + m[3] + ")";
-      break;
+    function sample() {
+      var els = [document.body, document.documentElement];
+      if (document.body && document.body.firstElementChild) els.push(document.body.firstElementChild);
+      var dark = null, bg = null;
+      for (var i = 0; i < els.length; i++) {
+        if (!els[i]) continue;
+        var c = getComputedStyle(els[i]).backgroundColor;
+        var m = c && c.match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?\s*\)/);
+        if (!m) continue;
+        var a = m[4] === undefined ? 1 : parseFloat(m[4]);
+        if (a < 0.5) continue;
+        dark = (0.299 * m[1] + 0.587 * m[2] + 0.114 * m[3]) < 128;
+        bg = "rgb(" + m[1] + "," + m[2] + "," + m[3] + ")";
+        break;
+      }
+      if (dark === null) dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      T.core.invoke("report_theme", { dark: dark, bg: bg }).catch(function () {});
     }
-    if (dark === null) dark = matchMedia("(prefers-color-scheme: dark)").matches;
-    T.core.invoke("report_theme", { dark: dark, bg: bg });
+    window.__kimiThemeSample = sample;
+    sample();
   } catch (e) {}
 })();"#;
+
+/// 自绘页在 CSS 解析前写入有效主题；local 中的 kimi web 不使用此脚本
+pub(crate) fn shell_theme_init_js(dark: bool) -> String {
+    r#"(function () {
+  if (location.hostname !== "tauri.localhost" && location.protocol !== "tauri:") return;
+  var theme = "__THEME__";
+  function apply() {
+    if (!document.documentElement) return false;
+    document.documentElement.dataset.theme = theme;
+    return true;
+  }
+  if (apply()) return;
+  var observer = new MutationObserver(function () { if (apply()) observer.disconnect(); });
+  observer.observe(document, { childList: true, subtree: true });
+})();"#
+        .replace("__THEME__", if dark { "dark" } else { "light" })
+}
 
 /// 注入本地与远端内容 WebView 的共享脚本，补齐两块 WebView2 缺失行为：
 /// 1. F5 / Ctrl+R 触发页面重载（WebView2 默认不响应浏览器式刷新快捷键），
@@ -47,7 +65,7 @@ pub(crate) const REFRESH_BRIDGE_JS: &str = r#"window.addEventListener("keydown",
         // 缺失会让设置面板在初始化时抛 TypeError（前端错误边界显示"出错了"）；
         // 本壳不提供自动更新，状态恒为 idle，前端据此隐藏更新入口
         log: (level, message, args) => { console[level === "error" ? "error" : "info"](message, ...(args || [])) },
-        setTheme: () => {},
+        setTheme: () => { if (window.__kimiThemeSample) window.__kimiThemeSample() },
         onUpdateStatus: () => () => {},
         getUpdateStatus: () => Promise.resolve({ state: "idle" })
     };

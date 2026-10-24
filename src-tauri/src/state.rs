@@ -26,7 +26,7 @@ pub(crate) struct AppState {
     pub(crate) stats: Mutex<StatsState>,
     /// 今日用量（跨会话聚合）：按本地日期分桶，跨天时整体重置
     pub(crate) daily: Mutex<DailyStats>,
-    /// 当前活动选项卡："local" | "remote"
+    /// 当前活动选项卡："local" | "remote" | "settings"，启动时为 "local"
     pub(crate) active_tab: Mutex<String>,
     /// 最近一次采样得到的页面主题与背景色，用于去重后通知 tabbar / 统计浮窗
     pub(crate) last_theme: Mutex<Option<(bool, Option<String>)>>,

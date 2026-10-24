@@ -544,7 +544,8 @@
 
       /* ---------- 事件 ---------- */
       listen("settings-changed", e => fillForm(e.payload));
-      listen("theme-changed", e => { document.documentElement.dataset.theme = e.payload; });
+      listen("theme-changed", e => { document.documentElement.dataset.theme = e.payload; })
+        .then(() => invoke("sync_theme")).catch(() => {});
       listen("cli-info", e => renderCliInfo(e.payload));
       listen("cli-upgrade", e => {
         const p = e.payload || {};

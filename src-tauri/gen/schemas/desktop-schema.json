@@ -495,6 +495,12 @@
           "markdownDescription": "Enables the switch_tab command without any pre-configured scope."
         },
         {
+          "description": "Enables the sync_theme command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sync-theme",
+          "markdownDescription": "Enables the sync_theme command without any pre-configured scope."
+        },
+        {
           "description": "Enables the upgrade_cli command without any pre-configured scope.",
           "type": "string",
           "const": "allow-upgrade-cli",
@@ -655,6 +661,12 @@
           "type": "string",
           "const": "deny-switch-tab",
           "markdownDescription": "Denies the switch_tab command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sync_theme command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sync-theme",
+          "markdownDescription": "Denies the sync_theme command without any pre-configured scope."
         },
         {
           "description": "Denies the upgrade_cli command without any pre-configured scope.",

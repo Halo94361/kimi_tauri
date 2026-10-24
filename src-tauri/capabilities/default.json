@@ -14,6 +14,7 @@
     "allow-retry-proxy",
     "allow-switch-tab",
     "allow-report-theme",
+    "allow-sync-theme",
     "allow-session-stats",
     "allow-daily-stats",
     "allow-weekly-stats",

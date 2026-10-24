@@ -23,7 +23,7 @@
       --divider: rgba(255, 255, 255, 0.08);
       --tabbar-bg: #1a1a1e;
     }
-    body.light {
+    :root[data-theme="light"] {
       --page-bg: #ffffff;
       --panel: rgba(255, 255, 255, 0.92);
       --fg: rgba(0, 0, 0, 0.85);
@@ -342,8 +342,9 @@
 
       /* ---------- 主题 ---------- */
       function applyTheme(p) {
-        var dark = !p || p.dark !== false;
-        document.body.classList.toggle("light", !dark);
+        var current = p ? (p.dark === false ? "light" : "dark") : document.documentElement.dataset.theme;
+        var dark = current !== "light";
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
         var bg = (p && p.bg) || (dark ? "#1a1a1e" : "#ffffff");
         document.documentElement.style.setProperty("--page-bg", bg);
       }

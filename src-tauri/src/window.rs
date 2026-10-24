@@ -1,7 +1,10 @@
 //! 主窗口与子 WebView 的布局、选项卡切换与导航管控
 
+use tauri::utils::config::Color;
 use tauri::webview::{NewWindowResponse, PermissionKind, PermissionResponse, WebviewBuilder};
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, WebviewUrl};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Theme, Url, Webview, WebviewUrl,
+};
 
 use crate::settings::{Settings, ThemePreference};
 use crate::state::AppState;
@@ -12,6 +15,15 @@ const REMOTE_URL: &str = "https://code-rc.kimi.com/";
 
 /// 顶部选项卡栏（tabbar WebView）的逻辑高度
 pub(crate) const TABBAR_HEIGHT: f64 = 36.0;
+
+/// WebView 首绘与页面重载期间使用的原生底色，避免默认黑色闪屏
+pub(crate) fn theme_background(dark: bool) -> Color {
+    if dark {
+        Color(26, 26, 30, 255)
+    } else {
+        Color(255, 255, 255, 255)
+    }
+}
 
 /// 允许在窗口内导航的来源：Tauri 应用自身页面与本机 kimi web 服务
 pub(crate) fn is_local(url: &Url) -> bool {
@@ -56,6 +68,11 @@ pub(crate) fn switch_to_tab(app: &AppHandle, tab: &str) {
             } else {
                 let _ = wv.hide();
             }
+        }
+    }
+    if matches!(tab, "local" | "remote") {
+        if let Some(wv) = app.get_webview(tab) {
+            let _ = wv.eval(crate::inject::THEME_SAMPLE_JS);
         }
     }
     apply_stats_visibility(app);
@@ -151,10 +168,14 @@ pub(crate) fn switch_tab(tab: String, app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 主题采样脚本（THEME_SAMPLE_JS）的上报入口：采样结果去重后广播有效主题
+/// 主题采样脚本（THEME_SAMPLE_JS）的上报入口：仅接受活动页面的采样，
+/// 去重后广播有效主题，避免切卡前发出的迟到结果覆盖新页面
 #[tauri::command]
-pub(crate) fn report_theme(dark: bool, bg: Option<String>, app: AppHandle) {
+pub(crate) fn report_theme(dark: bool, bg: Option<String>, webview: Webview, app: AppHandle) {
     let state = app.state::<AppState>();
+    if webview.label() != state.active_tab.lock().unwrap().as_str() {
+        return;
+    }
     let mut last = state.last_theme.lock().unwrap();
     let next = (dark, bg);
     if last.as_ref() == Some(&next) {
@@ -182,19 +203,32 @@ pub(crate) fn effective_theme(app: &AppHandle) -> (bool, Option<String>) {
     }
 }
 
-/// 向自绘页广播主题：tabbar / settings / local（index/error）监听 theme-changed，
-/// 统计浮窗监听 page-theme（附页面底色，用于消除圆角色差）。
-/// 定向投递，远端托管页收不到本机状态
+/// 同一事件广播到全部 WebView，并同步原生标题栏、窗口与各 WebView 的首绘底色；
+/// 统计浮窗另收页面采样色，用于消除圆角色差
 pub(crate) fn broadcast_theme(app: &AppHandle) {
     let (dark, bg) = effective_theme(app);
-    for label in ["tabbar", "settings", "local"] {
-        let _ = app.emit_to(label, "theme-changed", if dark { "dark" } else { "light" });
+    let color = theme_background(dark);
+    if let Some(win) = app.get_window("main") {
+        let _ = win.set_theme(Some(if dark { Theme::Dark } else { Theme::Light }));
+        let _ = win.set_background_color(Some(color));
     }
+    for label in ["tabbar", "local", "remote", "settings", "stats"] {
+        if let Some(wv) = app.get_webview(label) {
+            let _ = wv.set_background_color(Some(color));
+        }
+    }
+    let _ = app.emit("theme-changed", if dark { "dark" } else { "light" });
     let _ = app.emit_to(
         "stats",
         "page-theme",
         serde_json::json!({ "dark": dark, "bg": bg }),
     );
+}
+
+/// 自绘页完成事件监听注册后调用，补发当前有效主题，避免首次广播丢失
+#[tauri::command]
+pub(crate) fn sync_theme(app: AppHandle) {
+    broadcast_theme(&app);
 }
 
 /// 设置的即时副作用：主题、远端选项卡、统计浮窗总开关。
@@ -230,10 +264,13 @@ pub(crate) fn ensure_remote_webview(app: &AppHandle) -> tauri::Result<()> {
     };
     let (w, h) = window_logical_size(&win);
     let perm_app = app.clone();
+    let dark = effective_theme(app).0;
     let wv = win.add_child(
         WebviewBuilder::new("remote", WebviewUrl::External(Url::parse(REMOTE_URL).unwrap()))
+            .background_color(theme_background(dark))
             .disable_drag_drop_handler()
             .initialization_script(crate::inject::REFRESH_BRIDGE_JS)
+            .initialization_script(crate::inject::THEME_SAMPLE_JS)
             .on_permission_request(move |_, kind| notification_permission(&perm_app, kind))
             .on_navigation(|url| {
                 if is_remote_allowed(url) {

@@ -152,10 +152,11 @@
     }));
     // Rust 侧强制切卡（如本地服务出错）时同步高亮
     window.__TAURI__.event.listen("tab-changed", e => setActive(e.payload));
-    // Rust 侧页面主题采样结果：精确覆盖 prefers-color-scheme 兜底
+    // Rust 侧页面主题采样结果：精确覆盖 prefers-color-scheme 兜底；
+    // 监听就绪后补取一次，避免启动时的首次广播丢失
     window.__TAURI__.event.listen("theme-changed", e => {
       document.documentElement.dataset.theme = e.payload;
-    });
+    }).then(() => window.__TAURI__.core.invoke("sync_theme")).catch(() => {});
 
     // 「远端」选项卡按设置显隐：初始拉取一次，之后跟随设置变更
     const remoteTab = document.querySelector('.tab[data-tab="remote"]');

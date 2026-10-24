@@ -21,18 +21,20 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
 use tauri::window::WindowBuilder;
-use tauri::{LogicalPosition, LogicalSize, Manager, WebviewUrl};
+use tauri::{LogicalPosition, LogicalSize, Manager, Theme, WebviewUrl};
 
-use crate::inject::{REFRESH_BRIDGE_JS, SESSION_REPORTER_JS, THEME_SAMPLE_JS};
+use crate::inject::{
+    shell_theme_init_js, REFRESH_BRIDGE_JS, SESSION_REPORTER_JS, THEME_SAMPLE_JS,
+};
 use crate::state::AppState;
 use crate::stats_win::{STATS_BAR_HEIGHT, STATS_WIDTH};
 use crate::window::{
-    ensure_remote_webview, is_local, layout_webviews, notification_permission, open_external,
-    show_main_window, TABBAR_HEIGHT,
+    broadcast_theme, effective_theme, ensure_remote_webview, is_local, layout_webviews,
+    notification_permission, open_external, show_main_window, theme_background, TABBAR_HEIGHT,
 };
 
-/// 活动页面主题采样周期：eval 一段只读脚本的开销可忽略，200ms 足够跟手
-const THEME_POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// 活动内容页主题采样周期；每次 eval 同步读取并上报，结果变化时立即广播
+const THEME_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -52,6 +54,7 @@ pub fn run() {
             usage::weekly_stats,
             window::switch_tab,
             window::report_theme,
+            window::sync_theme,
             usage::report_session,
             stats_win::stats_restore,
             stats_win::stats_set_size,
@@ -72,6 +75,8 @@ pub fn run() {
             // 壳自身设置先于窗口/子进程加载：远端选项卡、代理模式、端口等都读它
             let loaded = settings::load(&app.handle());
             *app.state::<AppState>().settings.lock().unwrap() = loaded;
+            let initial_dark = effective_theme(app.handle()).0;
+            let initial_bg = theme_background(initial_dark);
 
             // 系统托盘：关窗行为见 CloseRequested；菜单提供设置与重启入口，
             // 「退出」才真正结束应用与子进程
@@ -146,12 +151,16 @@ pub fn run() {
                 win_builder = win_builder.icon(icon.clone())?;
             }
             let win = win_builder.build()?;
+            let _ = win.set_theme(Some(if initial_dark { Theme::Dark } else { Theme::Light }));
+            let _ = win.set_background_color(Some(initial_bg));
 
             let content_pos = LogicalPosition::new(0.0, TABBAR_HEIGHT);
             let content_size = LogicalSize::new(win_w, (win_h - TABBAR_HEIGHT).max(1.0));
 
             let tabbar = win.add_child(
-                WebviewBuilder::new("tabbar", WebviewUrl::App("tabs.html".into())),
+                WebviewBuilder::new("tabbar", WebviewUrl::App("tabs.html".into()))
+                    .background_color(initial_bg)
+                    .initialization_script(shell_theme_init_js(initial_dark)),
                 LogicalPosition::new(0.0, 0.0),
                 LogicalSize::new(win_w, TABBAR_HEIGHT),
             )?;
@@ -160,10 +169,14 @@ pub fn run() {
             let perm_app = app.handle().clone();
             win.add_child(
                 WebviewBuilder::new("local", WebviewUrl::App("index.html".into()))
+                    .background_color(initial_bg)
                     // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
                     .disable_drag_drop_handler()
+                    .initialization_script(shell_theme_init_js(initial_dark))
                     // F5/Ctrl+R 刷新快捷键 + window.kimiDesktop 桌面桥
                     .initialization_script(REFRESH_BRIDGE_JS)
+                    // 页面主题变化时立即采样上报
+                    .initialization_script(THEME_SAMPLE_JS)
                     // 上报当前会话 id，供独立的统计浮窗查询对应会话
                     .initialization_script(SESSION_REPORTER_JS)
                     // Web 通知按设置放行：WebView2 对未应答的权限请求默认拒绝，
@@ -197,7 +210,9 @@ pub fn run() {
 
             // 设置页：第三个内容 WebView，纯原生自绘；初始隐藏，切到「设置」时显示
             win.add_child(
-                WebviewBuilder::new("settings", WebviewUrl::App("settings.html".into())),
+                WebviewBuilder::new("settings", WebviewUrl::App("settings.html".into()))
+                    .background_color(initial_bg)
+                    .initialization_script(shell_theme_init_js(initial_dark)),
                 content_pos,
                 content_size,
             )?
@@ -209,6 +224,8 @@ pub fn run() {
             let stats_pos = LogicalPosition::new(win_w - STATS_WIDTH - 12.0, TABBAR_HEIGHT + 12.0);
             let stats = win.add_child(
                 WebviewBuilder::new("stats", WebviewUrl::App("stats.html".into()))
+                    .background_color(initial_bg)
+                    .initialization_script(shell_theme_init_js(initial_dark))
                     // 不在创建时抢焦点，键盘输入应留在内容页
                     .focused(false),
                 stats_pos,
@@ -230,11 +247,11 @@ pub fn run() {
                 *app.state::<AppState>().app_origin.lock().unwrap() = u.to_string();
             }
 
+            *app.state::<AppState>().active_tab.lock().unwrap() = "local".to_string();
+            broadcast_theme(app.handle());
             let _ = win.show();
 
-            // 主题采样轮询：定时在当前活动的内容 WebView 里 eval 只读采样脚本，
-            // 由脚本读取页面计算背景色并经 report_theme 上报深浅色；
-            // 设置页是自绘页，切到设置页时保持上一次采样结果即可
+            // 只轮询当前活动的内容 WebView；设置页使用壳自身主题，无需采样
             let app_theme = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(THEME_POLL_INTERVAL);

@@ -39,4 +39,4 @@ cd src-tauri && cargo build --release
 
 ## 许可证
 
-本项目以 [MIT](LICENSE) 发布。第三方组件：内置字体子集更纱黑体（Sarasa Gothic，OFL-1.1，见 `ui/fonts/LICENSE-Sarasa-Gothic.txt`）；`src-tauri/link-libs/libgcc_eh.a` 来自 GCC 运行时库（GPL-3.0 with GCC Runtime Library Exception，链接使用不构成衍生作品）。
+本项目以 [MIT](LICENSE) 发布。第三方组件：内置字体子集更纱黑体（Sarasa Gothic，OFL-1.1，见 `ui/fonts/LICENSE-Sarasa-Gothic.txt`）；`src-tauri/link-libs/libgcc_eh.a` 来自 GCC 运行时库（GPL-3.0 with GCC Runtime Library Exception，链接使用不构成衍生作品）。统计浮窗的视觉语言与图表技法参考 [kimi-code-monitor](https://github.com/bfjnbvf/kimi-code-monitor)（MIT，Copyright (c) 2026 十叶），完整许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

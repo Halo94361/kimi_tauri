@@ -290,7 +290,7 @@
         <button id="refreshInfo">刷新版本信息</button>
         <button id="upgrade" class="primary">立即升级 CLI</button>
       </div>
-      <p class="hint">最新版本来自 CLI 自动更新机制的检查记录；「立即升级」会获取并安装最新版，需二次确认，完成后自动重启本地服务。</p>
+      <p class="hint">「刷新版本信息」会向 CLI 的更新源在线检查一次（只读，不会安装）；检查失败时显示 CLI 缓存。「立即升级」才会下载并安装最新版，需二次确认，完成后自动重启本地服务。</p>
       <div id="upgradeMsg" hidden></div>
       <div class="btns">
         <button data-open="cli_dir">打开 CLI 配置目录</button>
@@ -480,12 +480,23 @@
         $("cliVersion").textContent = cliInfo.version || (cliInfo.error ? "读取失败：" + cliInfo.error : "未找到 CLI");
         let latest = cliInfo.latest ? cliInfo.latest : "暂无更新信息";
         if (cliInfo.checked_at) latest += "（检查于 " + cliInfo.checked_at + "）";
+        if (cliInfo.update_error) latest += "（在线检查失败，显示缓存）";
         if (cliInfo.version && cliInfo.latest && cliInfo.version !== cliInfo.latest) latest += "，可更新";
         $("cliLatest").textContent = latest;
+        $("cliLatest").title = cliInfo.update_error || "";
+        $("refreshInfo").disabled = false;
+        $("refreshInfo").textContent = "刷新版本信息";
       }
       $("refreshInfo").addEventListener("click", () => {
         $("cliVersion").textContent = "读取中…";
-        invoke("refresh_cli_info").catch(e => toast(String(e)));
+        $("cliLatest").textContent = "正在向更新源检查…";
+        $("refreshInfo").disabled = true;
+        $("refreshInfo").textContent = "检查中…";
+        invoke("refresh_cli_info", { check: true }).catch(e => {
+          toast(String(e));
+          $("refreshInfo").disabled = false;
+          $("refreshInfo").textContent = "刷新版本信息";
+        });
       });
       $("upgrade").addEventListener("click", async () => {
         const ok = await confirmBox(

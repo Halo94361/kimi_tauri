@@ -21,7 +21,7 @@
 - **外链管控**：`is_local()` 白名单（127.0.0.1 / localhost / tauri.localhost）内才允许窗口内导航，其余经 `tauri-plugin-opener` 交给系统浏览器。
 - **窗口尺寸**：按主显示器工作区 85% 钳制（宽 720~1600，高 480~1200），适配高 DPI。
 - **壳设置**：`settings.rs` 持久化到 `app_config_dir/settings.json`（Windows 为 `%APPDATA%\com.tauri-kimi.app\settings.json`），字段全带默认值、文件缺失或损坏回退默认；统计浮窗展示开关（`stats_show_usage` / `stats_quota_kimi` / `stats_quota_opencode`）与额度刷新间隔（`stats_quota_refresh_secs`，默认 120s，钳制 30~3600）也在其中；写入走 tmp + `MoveFileExW` 原子替换。`set_settings` 先落盘再生效，广播 `settings-changed`（同时发给 `stats`）并应用即时副作用（主题/远端选项卡/浮窗/代理模式/用量与额度开关/额度刷新间隔）；kimi 路径与端口只保存，重启本地服务后生效，`state.launched` 记录本次启动实际配置，与当前设置不一致时 `get_diagnostics.restart_pending=true`，设置页显示「待重启」提示条。设置页 `ui/settings.html` 是第三个内容 WebView，命令：`get_settings` / `set_settings` / `reset_settings` / `get_diagnostics` / `refresh_cli_info` / `upgrade_cli` / `open_config_target` / `disconnect_remote` / `stats_reset_position`。
-- **CLI 升级**：设置页二次确认（提示打断对话并重启）后 `upgrade_cli` 后台执行 `kimi upgrade -y`（10 分钟超时、stdout/stderr 捕获、防重入、`CREATE_NO_WINDOW`），成功走 `restart_server` 重启本地服务使新二进制生效，进度经 `cli-upgrade` 事件回发。`refresh_cli_info` 读 `kimi --version` 与 `~/.kimi-code/updates/latest.json`（`latest` / `checkedAt`），只做展示、不主动触发网络检查；`kimi upgrade` 没有只检查不安装的参数。诊断汇总不含 token。
+- **CLI 升级**：设置页二次确认（提示打断对话并重启）后 `upgrade_cli` 后台执行 `kimi upgrade -y`（10 分钟超时、stdout/stderr 捕获、防重入、`CREATE_NO_WINDOW`），成功走 `restart_server` 重启本地服务使新二进制生效，进度经 `cli-upgrade` 事件回发。`refresh_cli_info` 读 `kimi --version`，并向 CLI 更新源 CDN 的 `/latest`（按 `~/.kimi-code/region` 选 `code.kimi.com` / `code.kimi.ai`，跟随 302）做一次只读检查；失败回退 `updates/latest.json` 的 `latest` / `checkedAt` 并在设置页标注「显示缓存」。`kimi upgrade` 没有只检查不安装的参数，安装仍只由升级按钮触发。诊断汇总不含 token。
 
 ## 关键契约
 

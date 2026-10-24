@@ -102,7 +102,7 @@ systemctl --user status opencode-session-proxy
 journalctl --user -u opencode-session-proxy -f
 ```
 
-服务设置了 `Restart=always`，并通过 `HTTPS_PROXY` 访问上游。
+服务设置了 `Restart=always`，上游直连：unit 不注入 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`（与 Windows 侧 `server.rs` spawn 时一致）。需要临时走代理时在 unit 里自行补这几行再 `systemctl --user restart`。
 
 ## 配置项
 
@@ -117,7 +117,7 @@ debug 日志只含路径、session id 和来源，不含请求体、Authorizatio
 
 ## 验证与排障
 
-正常日志：
+正常日志（`OCSP_DEBUG=1` 才有 `inject` 行；默认关闭时只有启动行与上游错误行）：
 
 ```
 listening on 127.0.0.1:58787 -> https://opencode.ai/inference/go (debug=true)
@@ -144,7 +144,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 |---|---|---|
 | `404` 无 body | `base_url` 少了 `/openai/v1` | 改成 `.../openai/v1` |
 | `400 MissingSessionID` | 请求没经过代理，或代理没注入 | 查 `base_url`、代理日志 |
-| `502` | 代理未启动 / 上游不可达 | 看服务状态、`HTTPS_PROXY` |
+| `502` | 代理未启动 / 上游不可达 | 看服务状态、上游是否可直连 |
 | `Invalid API key` | key 不属于该 workspace | 在 Console 重新生成 |
 | 连接被拒 | 端口无人监听 | 启动代理，或检查 58787 是否被占用 |
 

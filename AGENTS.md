@@ -67,3 +67,4 @@ CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --re
 - `ui/` 保持纯原生 HTML/CSS/JS，禁止引入前端框架；Tauri API 走 `window.__TAURI__.core.invoke`。
 - 任何启动子进程的路径都必须保证 `WindowEvent::CloseRequested` 与异常分支能 `kill_child`，防止进程泄漏。
 - 外部 URL 一律走系统浏览器，不得在内置 WebView 加载。
+- **推送**：每次提交都要同步推送到两个 remote（GitHub 与内网镜像），只推一个会让两处历史分叉。纯文档/说明类改动在 commit message 末尾加 `[skip ci]`，避免触发 GitHub Actions 构建。

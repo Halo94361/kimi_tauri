@@ -1,6 +1,6 @@
 //! 全局共享状态：AppState 与各领域的数据结构
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::AtomicU64;
@@ -26,6 +26,12 @@ pub(crate) struct AppState {
     pub(crate) stats: Mutex<StatsState>,
     /// 今日用量（跨会话聚合）：按本地日期分桶，跨天时整体重置
     pub(crate) daily: Mutex<DailyStats>,
+    /// 近 24 小时用量：按本地整点分桶，供统计浮窗柱图
+    pub(crate) hourly: Mutex<HourlyStats>,
+    /// 套餐额度缓存（Kimi / OpenCode 各自独立回退）
+    pub(crate) quota_cache: Mutex<crate::quota::QuotaCache>,
+    /// 额度查询串行锁：网络与 seekfetch 调用不并发
+    pub(crate) quota_lock: Mutex<()>,
     /// 当前活动选项卡："local" | "remote" | "settings"，启动时为 "local"
     pub(crate) active_tab: Mutex<String>,
     /// 最近一次采样得到的页面主题与背景色，用于去重后通知 tabbar / 统计浮窗
@@ -148,4 +154,18 @@ pub(crate) struct DailyAgg {
     pub(crate) output: u64,
     pub(crate) cache_read: u64,
     pub(crate) cache_creation: u64,
+}
+
+/// 近 24 小时用量：与 DailyStats 同为增量游标，但桶键是本地整点起点（epoch ms）
+#[derive(Default)]
+pub(crate) struct HourlyStats {
+    pub(crate) cursors: HashMap<PathBuf, u64>,
+    pub(crate) buckets: BTreeMap<i64, HourAgg>,
+}
+
+/// 单个整点的用量，主代理与子代理分开存，柱图按主/子堆叠
+#[derive(Default)]
+pub(crate) struct HourAgg {
+    pub(crate) main: DailyAgg,
+    pub(crate) sub: DailyAgg,
 }

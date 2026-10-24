@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <title>Kimi Code - 用量统计</title>
   <style>
-    /* 更纱黑体等宽子集：与其它自绘页面共用，覆盖 ASCII + 中文常用字 */
+    /* 更纱黑体等宽子集：与其它自绘页面共用，覆盖 ASCII + 中文常用字。
+       标签用系统无衬线，数字单独用等宽——仪表盘的字重对比主要来自这里 */
     @font-face {
       font-family: "SarasaMonoSC";
       src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
@@ -13,34 +14,60 @@
       font-display: block;
     }
     /* 独立子 WebView：宽度固定，高度随内容变化由 Rust 调整；
-       页面底色取内容页采样色，保证圆角外沿与背后页面一致 */
+       页面底色取内容页采样色，保证圆角外沿与背后页面一致。
+       内部一律用半透明填充，落在任何采样底色上都自然 */
     :root {
+      color-scheme: dark;
       --page-bg: #1a1a1e;
-      --panel: rgba(28, 28, 30, 0.92);
-      --fg: rgba(255, 255, 255, 0.92);
-      --muted: rgba(255, 255, 255, 0.55);
-      --border: rgba(255, 255, 255, 0.18);
+      --panel: rgba(30, 30, 34, 0.94);
+      --text: rgba(255, 255, 255, 0.88);
+      --text-2: rgba(255, 255, 255, 0.56);
+      --text-3: rgba(255, 255, 255, 0.38);
+      --fill-1: rgba(255, 255, 255, 0.05);
+      --fill-2: rgba(255, 255, 255, 0.09);
+      --fill-2-hover: rgba(255, 255, 255, 0.14);
+      --border: rgba(255, 255, 255, 0.12);
       --divider: rgba(255, 255, 255, 0.08);
+      --accent: #1a88ff;
+      --green: #16c456;
+      --orange: #ff9f0a;
+      --danger: #ff4756;
       --tabbar-bg: #1a1a1e;
+      --sans: "SarasaMonoSC", "Sarasa Mono SC", ui-monospace, "SF Mono", Menlo,
+        Consolas, monospace;
+      --mono: "SarasaMonoSC", "Sarasa Mono SC", ui-monospace, "SF Mono", Menlo,
+        Consolas, monospace;
     }
     :root[data-theme="light"] {
+      color-scheme: light;
       --page-bg: #ffffff;
-      --panel: rgba(255, 255, 255, 0.92);
-      --fg: rgba(0, 0, 0, 0.85);
-      --muted: rgba(0, 0, 0, 0.5);
+      --panel: rgba(255, 255, 255, 0.94);
+      --text: rgba(0, 0, 0, 0.86);
+      --text-2: rgba(0, 0, 0, 0.55);
+      --text-3: rgba(0, 0, 0, 0.38);
+      --fill-1: rgba(0, 0, 0, 0.035);
+      --fill-2: rgba(0, 0, 0, 0.06);
+      --fill-2-hover: rgba(0, 0, 0, 0.1);
       --border: rgba(0, 0, 0, 0.12);
-      --divider: rgba(0, 0, 0, 0.08);
+      --divider: rgba(0, 0, 0, 0.07);
+      --accent: #1783ff;
+      --green: #0fae4a;
+      --orange: #f08a00;
+      --danger: #e5374a;
       --tabbar-bg: #ffffff;
     }
     html, body {
       margin: 0;
       overflow: hidden;
       background: var(--page-bg);
-      color: var(--fg);
-      /* 等宽字体让 TPS / token 数字在固定宽度内保持稳定；emoji 回退到系统字体 */
-      font: 12px/1.5 "SarasaMonoSC", "Sarasa Mono SC", "Segoe UI", "Microsoft YaHei", "Segoe UI Emoji", sans-serif;
+      color: var(--text);
+      font: 12px/1.5 var(--sans);
       user-select: none;
       -webkit-user-select: none;
+    }
+    .num {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
     }
     #root {
       position: relative;
@@ -53,7 +80,7 @@
       justify-content: center;
       height: 30px;
       box-sizing: border-box;
-      padding: 0 8px;
+      padding: 0 10px;
       border: 1px solid var(--border);
       border-radius: 10px;
       background: var(--panel);
@@ -65,7 +92,10 @@
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
+      font-size: 11px;
+      color: var(--text-2);
     }
+    #barText .num { color: var(--text); }
     body.docked #bar {
       height: 36px;
       padding: 0 8px;
@@ -92,50 +122,237 @@
     body.folded #dot { display: flex; }
     /* 吸附态折叠成圆点时，底色应与选项卡栏一致，而不是内容页 */
     body.docked.folded { background: var(--tabbar-bg); }
+
     #detail {
       display: none;
       box-sizing: border-box;
       width: 300px;
       margin-top: 6px;
-      padding: 8px 12px;
+      padding: 10px 12px 12px;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 12px;
       background: var(--panel);
       overflow-y: auto;
       cursor: default;
     }
-    .row {
+    .detail-head {
       display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      white-space: nowrap;
-    }
-    .row > span:first-child {
-      flex: none;
-      color: var(--muted);
-    }
-    .row > span:last-child {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      text-align: right;
-    }
-    .head {
-      display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 2px;
+      justify-content: space-between;
+      margin-bottom: 8px;
     }
-    .head > span:first-child { color: var(--muted); }
-    .section {
-      margin: 6px 0 2px;
-      padding-top: 4px;
-      border-top: 1px solid rgba(128, 128, 128, 0.35);
-      color: var(--muted);
+    .detail-head > span:first-child {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      color: var(--text-3);
     }
     #pin {
       cursor: pointer;
       opacity: 0.35;
+      font-size: 11px;
+      transition: opacity 120ms ease;
+    }
+    #pin:hover { opacity: 1; }
+
+    .section {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 10px 0 5px;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+    .section:first-child { margin-top: 0; }
+    .section .note {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-3);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .card {
+      padding: 8px 9px 9px;
+      border-radius: 9px;
+      background: var(--fill-1);
+    }
+    .plan + .plan { margin-top: 2px; }
+    .plan-head {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 6px;
+    }
+    .plan-name {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.01em;
+    }
+    .plan-sub {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+    .brand-dot {
+      flex-shrink: 0;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    .brand-dot.kimi { background: var(--accent); }
+    .brand-dot.oc { background: var(--green); }
+    .divider {
+      height: 1px;
+      margin: 8px 0 7px;
+      background: var(--divider);
+    }
+
+    .quota + .quota { margin-top: 6px; }
+    .quota-head {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      min-width: 0;
+    }
+    .quota-label {
+      font-size: 10px;
+      color: var(--text-2);
+      white-space: nowrap;
+    }
+    .quota-reset {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-3);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .quota-pct {
+      margin-left: auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-2);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .quota-pct.mid { color: var(--orange); }
+    .quota-pct.high { color: var(--danger); }
+    .track {
+      position: relative;
+      height: 4px;
+      margin-top: 3px;
+      border-radius: 100px;
+      background: var(--fill-2);
+      overflow: visible;
+    }
+    .fill {
+      display: block;
+      height: 100%;
+      border-radius: 100px;
+      background: var(--green);
+      transition:
+        width 300ms cubic-bezier(0.23, 1, 0.32, 1),
+        background-color 200ms ease;
+    }
+    .fill.mid { background: var(--orange); }
+    .fill.high { background: var(--danger); }
+    /* 匀速参照：按窗口已流逝比例定位，上下各凸出 2px，压在填充之上 */
+    .pace {
+      position: absolute;
+      top: -2px;
+      bottom: -2px;
+      width: 2px;
+      margin-left: -1px;
+      border-radius: 1px;
+      background: var(--text-3);
+      opacity: 0.8;
+      transition: left 300ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+
+    .hint {
+      display: flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 5px 8px;
+      border: 1px dashed var(--border);
+      border-radius: 7px;
+      color: var(--text-3);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+    .empty {
+      padding: 6px 0;
+      color: var(--text-3);
+      font-size: 10px;
+    }
+
+    .chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 1px;
+      height: 32px;
+      margin-top: 4px;
+    }
+    .chart-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      height: 100%;
+      min-width: 0;
+    }
+    .chart-bar {
+      width: 100%;
+      min-height: 0;
+      border-radius: 1px 1px 0 0;
+      background: var(--accent);
+      opacity: 0.55;
+      transition: opacity 120ms ease;
+    }
+    .chart-bar.sub {
+      background: var(--green);
+      opacity: 0.8;
+    }
+    .chart-bar.flat { border-radius: 0; }
+    .chart-col:hover .chart-bar { opacity: 1; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px 12px;
+    }
+    .cell {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 6px;
+      min-width: 0;
+    }
+    .cell .k {
+      flex-shrink: 0;
+      font-size: 10px;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+    .cell .v {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .fill, .pace, .chart-bar, #pin { transition: none; }
     }
   </style>
 </head>
@@ -144,7 +361,7 @@
     <div id="bar"><span id="barText"></span></div>
     <div id="dot">⚡</div>
     <div id="detail">
-      <div class="head"><span>本会话</span><span id="pin" title="锁定 / 自动收起">📌</span></div>
+      <div class="detail-head"><span>用量与额度</span><span id="pin" title="锁定 / 自动收起">📌</span></div>
       <div id="detailBody"></div>
     </div>
   </div>
@@ -169,13 +386,27 @@
       let dragging = false;
       let visible = false;
       let open = false;
-      let lastData = null, lastDaily = null;
+      let lastData = null, lastDaily = null, lastHourly = null, lastQuota = null;
+      // 设置里的额度展示开关：默认开，get_settings 返回后再校正
+      let quotaPrefs = { kimi: true, opencode: true };
       let lastW = 0, lastH = 0;
       let appliedH = 0;
       let sizePending = false;
 
+      function quotaEnabled() {
+        return quotaPrefs.kimi || quotaPrefs.opencode;
+      }
+
+      function hasQuota(q) {
+        if (!quotaEnabled()) return false;
+        return !!q && (
+          (quotaPrefs.kimi && q.kimi && q.kimi.ok) ||
+          (quotaPrefs.opencode && q.opencode && q.opencode.ok)
+        );
+      }
+
       function onKimiData() {
-        return (lastData && lastData.found) || (lastDaily && lastDaily.found);
+        return (lastData && lastData.found) || (lastDaily && lastDaily.found) || hasQuota(lastQuota);
       }
 
       function setVisible(v) {
@@ -277,58 +508,243 @@
         closeTimer = setTimeout(function () { setOpen(false); }, 160);
       });
 
-      /* ---------- 数据渲染 ---------- */
+      /* ---------- 格式化 ---------- */
+      function esc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
       function fmt(n) {
-        if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
-        if (n >= 1000) return (n / 1000).toFixed(1) + "K";
-        return String(n);
+        n = Number(n) || 0;
+        if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+        if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+        return String(Math.round(n));
       }
-      function row(k, v) {
-        return '<div class="row"><span>' + k + "</span><span>" + v + "</span></div>";
+      function pctText(p) {
+        if (p == null || !isFinite(p)) return "--";
+        var n = Number(p);
+        return (n >= 10 ? Math.round(n) : Math.round(n * 10) / 10) + "%";
       }
+      function pctClass(p) {
+        if (p == null) return "";
+        return p >= 95 ? "high" : p >= 80 ? "mid" : "";
+      }
+      function pad2(n) {
+        return n < 10 ? "0" + n : String(n);
+      }
+      function fmtReset(ms) {
+        if (!ms) return "";
+        var diff = ms - Date.now();
+        if (diff <= 0) return "即将重置";
+        var min = Math.floor(diff / 60000);
+        if (min < 60) return min + "m";
+        var h = Math.floor(min / 60);
+        if (h < 24) return h + "h" + (min % 60 ? (min % 60) + "m" : "");
+        var d = Math.floor(h / 24);
+        return d + "d" + (h % 24 ? (h % 24) + "h" : "");
+      }
+      function fmtAbs(ms) {
+        if (!ms) return "";
+        return new Date(ms).toLocaleString("zh-CN", {
+          month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+        });
+      }
+      /* 匀速参照：窗口已流逝比例；重置时间缺失或剩余超过整个窗口时不画 */
+      function paceLeft(q) {
+        if (!q || !q.reset_at || !q.window_ms) return null;
+        var elapsed = 1 - (q.reset_at - Date.now()) / q.window_ms;
+        if (!(elapsed >= 0 && elapsed <= 1)) return null;
+        return elapsed * 100;
+      }
+
+      /* ---------- 明细渲染 ---------- */
+      function section(label, note) {
+        return '<div class="section"><span>' + label + "</span>" +
+          (note ? '<span class="note">' + note + "</span>" : "") + "</div>";
+      }
+      /* OpenCode 的窗口上限不是独立额度：5h = 月额度 20%，本周 = 月额度 50%。
+         参考线把「本月已用」折算到窗口刻度：15% 表示本月已用掉 15% 的 5h 上限。
+         月额度缺失时不画线，避免退回按窗口时间独立计算 */
+      function ocPace(data, share) {
+        if (!data || !data.monthly || typeof data.monthly.used_pct !== "number") return null;
+        var used = Math.max(0, Math.min(100, data.monthly.used_pct));
+        return {
+          pct: Math.max(0, Math.min(100, used / share)),
+          title: "本月已用 " + pctText(used) + " 折算：该窗口上限为月额度的 " +
+            Math.round(share * 100) + "%"
+        };
+      }
+      function quotaRow(label, q, pace) {
+        if (!q || typeof q.used_pct !== "number") return "";
+        var p = Math.max(0, Math.min(100, q.used_pct));
+        var cls = pctClass(p);
+        // undefined = 按窗口时间匀速；null = 不画；对象 = 调用方给的位置与说明
+        var info = pace === undefined
+          ? { pct: paceLeft(q), title: "按窗口时间均匀消耗的位置" }
+          : pace;
+        var reset = fmtReset(q.reset_at);
+        return '<div class="quota">' +
+          '<div class="quota-head">' +
+            '<span class="quota-label">' + esc(label) + "</span>" +
+            (reset ? '<span class="quota-reset" title="' + esc(fmtAbs(q.reset_at)) + '">' + esc(reset) + "</span>" : "") +
+            '<span class="quota-pct ' + cls + '">' + pctText(p) + "</span>" +
+          "</div>" +
+          '<div class="track">' +
+            '<span class="fill ' + cls + '" style="width:' + p.toFixed(1) + '%"></span>' +
+            (info && info.pct != null
+              ? '<span class="pace" style="left:' + info.pct.toFixed(1) + '%" title="' + esc(info.title) + '"></span>'
+              : "") +
+          "</div>" +
+        "</div>";
+      }
+      function planBlock(kind, name, sub, data, rows) {
+        var body = "";
+        if (!data || data.disabled) {
+          body = '<div class="hint">正在查询…</div>';
+        } else if (!data.ok) {
+          body = '<div class="hint">' + esc(data.error || "额度暂不可用") + "</div>";
+        } else {
+          for (var i = 0; i < rows.length; i += 1) {
+            var row = rows[i];
+            var pace = row[2] ? row[2](data) : undefined;
+            body += quotaRow(row[0], data[row[1]], pace);
+          }
+          if (!body) body = '<div class="hint">暂无可显示的额度</div>';
+        }
+        return '<div class="plan">' +
+          '<div class="plan-head"><span class="brand-dot ' + kind + '"></span>' +
+          '<span class="plan-name">' + esc(name) + "</span>" +
+          '<span class="plan-sub">' + esc(sub) + "</span></div>" +
+          body + "</div>";
+      }
+      function cell(k, v) {
+        return '<div class="cell"><span class="k">' + esc(k) + '</span><span class="v">' + esc(v) + "</span></div>";
+      }
+      function grid(cells) {
+        return '<div class="grid">' + cells.join("") + "</div>";
+      }
+      function chartBlock(h) {
+        if (!h || !h.found || !h.hours) return "";
+        var max = 0, total = 0;
+        for (var i = 0; i < h.hours.length; i += 1) {
+          max = Math.max(max, h.hours[i].main + h.hours[i].sub);
+        }
+        var cols = h.hours.map(function (b) {
+          var main = Math.max(0, Number(b.main) || 0);
+          var sub = Math.max(0, Number(b.sub) || 0);
+          total += main + sub;
+          var mp = max > 0 ? (main / max) * 100 : 0;
+          var sp = max > 0 ? (sub / max) * 100 : 0;
+          var hour = new Date(b.t).getHours();
+          var title = pad2(hour) + ":00 · 主 " + fmt(main) + (sub > 0 ? " · 子 " + fmt(sub) : "");
+          var inner = "";
+          if (sub > 0) inner += '<span class="chart-bar sub" style="height:' + Math.max(4, sp).toFixed(1) + '%"></span>';
+          if (main > 0) inner += '<span class="chart-bar' + (sub > 0 ? " flat" : "") + '" style="height:' + Math.max(4, mp).toFixed(1) + '%"></span>';
+          return '<div class="chart-col" title="' + esc(title) + '">' + inner + "</div>";
+        }).join("");
+        var hit = h.cache_hit_rate != null ? " · 缓存 " + pctText(h.cache_hit_rate) : "";
+        return section("近 24 小时" + hit, fmt(total)) + '<div class="chart">' + cols + "</div>";
+      }
+
+      function barValue(v) {
+        return '<span class="num">' + esc(v) + "</span>";
+      }
+
       function render() {
         var d = lastData, daily = lastDaily;
         var sFound = d && d.found, dFound = daily && daily.found;
-        if (!sFound && !dFound) {
+        var quota = lastQuota || {};
+        var kimi = quota.kimi || null, oc = quota.opencode || null;
+        if (!onKimiData()) {
           setVisible(false);
           return;
         }
         setVisible(true);
+
+        /* 横条：优先实时 TPS，其次今日，最后额度摘要 */
+        var barHtml = "";
         if (sFound) {
-          // 空闲后保留最后一次统计值，避免横条退化成 -- 丢失可读信息
-          var tps = d.has_tps ? d.tps_avg.toFixed(1) : "--";
-          barText.textContent = "⚡ " + tps + " tok/s · ↑" + fmt(d.input_total) +
-            " ↓" + fmt(d.output_total) + " · 缓存 " + d.cache_hit_rate.toFixed(0) + "%";
-        } else {
-          barText.textContent = "⚡ 今日 ↑" + fmt(daily.input_total) + " ↓" + fmt(daily.output_total) +
-            " · 缓存 " + daily.cache_hit_rate.toFixed(0) + "%";
+          barHtml = "⚡ " + barValue(d.has_tps ? d.tps_avg.toFixed(1) : "--") + " tok/s · ↑" +
+            barValue(fmt(d.input_total)) + " · ↓" + barValue(fmt(d.output_total)) +
+            " · 缓存 " + barValue(pctText(d.cache_hit_rate));
+        } else if (dFound) {
+          barHtml = "今日 ↑" + barValue(fmt(daily.input_total)) + " ↓" + barValue(fmt(daily.output_total)) +
+            " · 缓存 " + barValue(pctText(daily.cache_hit_rate));
+        } else if (quotaPrefs.kimi && kimi && kimi.ok) {
+          barHtml = "Kimi 5h " + barValue(pctText(kimi.five_hour && kimi.five_hour.used_pct)) +
+            " · 本周 " + barValue(pctText(kimi.weekly && kimi.weekly.used_pct));
+        } else if (quotaPrefs.opencode && oc && oc.ok && oc.configured !== false) {
+          barHtml = "OpenCode 5h " + barValue(pctText(oc.rolling && oc.rolling.used_pct)) +
+            " · 本周 " + barValue(pctText(oc.weekly && oc.weekly.used_pct));
         }
+        barText.innerHTML = barHtml;
+
         var html = "";
+        var ocVisible = quotaPrefs.opencode && !(oc && oc.configured === false);
+        var plans = "";
+        if (quotaPrefs.kimi) {
+          plans += planBlock("kimi", "Kimi Code", "5h · 本周", kimi, [
+            ["5 小时", "five_hour"], ["本周", "weekly"]
+          ]);
+        }
+        if (ocVisible) {
+          if (plans) plans += '<div class="divider"></div>';
+          plans += planBlock("oc", "OpenCode Go", "滚动 · 周 · 月", oc, [
+            ["滚动 5h", "rolling", function (d) { return ocPace(d, 0.20); }],
+            ["本周", "weekly", function (d) { return ocPace(d, 0.50); }],
+            ["本月", "monthly"]
+          ]);
+        }
+        if (plans) {
+          var stale = (quotaPrefs.kimi && kimi && kimi.stale) || (ocVisible && oc && oc.stale);
+          var staleTitle = [
+            quotaPrefs.kimi && kimi && kimi.warning,
+            ocVisible && oc && oc.warning
+          ].filter(Boolean).join(" / ");
+          html += '<div class="section"><span>套餐额度</span>' +
+            (stale ? '<span class="note" title="' + esc(staleTitle) + '">缓存</span>' : "") + "</div>";
+          html += '<div class="card">' + plans + "</div>";
+        }
+
+        if (lastHourly) {
+          if (lastHourly.found) {
+            html += chartBlock(lastHourly);
+          } else {
+            html += section("近 24 小时", "") + '<div class="empty">暂无数据</div>';
+          }
+        }
+
         if (sFound) {
-          html +=
-            row("TPS 均值（近10次）", d.has_tps ? d.tps_avg.toFixed(1) + " tok/s" : "--") +
-            row("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--") +
-            row("输入合计", fmt(d.input_total)) +
-            row("缓存读", fmt(d.cache_read)) +
-            row("输出合计", fmt(d.output_total)) +
-            row("缓存命中率", d.cache_hit_rate.toFixed(1) + "%") +
-            row("会话", String(d.session_id || "").slice(0, 24));
+          html += section("本会话", "");
+          html += grid([
+            cell("TPS 均值", d.has_tps ? d.tps_avg.toFixed(1) : "--"),
+            cell("TPS 瞬时", d.has_tps ? d.tps_latest.toFixed(1) : "--"),
+            cell("输入合计", fmt(d.input_total)),
+            cell("输出合计", fmt(d.output_total)),
+            cell("缓存命中", pctText(d.cache_hit_rate)),
+            cell("缓存读", fmt(d.cache_read))
+          ]);
         }
-        html += '<div class="section">今日（全部会话）</div>';
+
+        html += section("今日 · 全部会话", "");
         if (dFound) {
-          html +=
-            row("输入合计", fmt(daily.input_total)) +
-            row("缓存读", fmt(daily.cache_read)) +
-            row("输出合计", fmt(daily.output_total)) +
-            row("缓存命中率", daily.cache_hit_rate.toFixed(1) + "%");
+          html += grid([
+            cell("输入合计", fmt(daily.input_total)),
+            cell("输出合计", fmt(daily.output_total)),
+            cell("缓存命中", pctText(daily.cache_hit_rate)),
+            cell("缓存读", fmt(daily.cache_read))
+          ]);
         } else {
-          html += '<div style="opacity:0.5">暂无数据</div>';
+          html += '<div class="empty">暂无数据</div>';
         }
+
         detailBody.innerHTML = html;
         if (pinned) setOpen(true);
         requestSize();
       }
 
+      /* ---------- 轮询 ---------- */
       function tickSession() {
         invoke("session_stats")
           .then(function (d) { lastData = d; render(); })
@@ -339,6 +755,21 @@
           .then(function (d) { lastDaily = d; render(); })
           .catch(function () { lastDaily = null; render(); });
       }
+      function tickHourly() {
+        invoke("hourly_stats")
+          .then(function (d) { lastHourly = d; render(); })
+          .catch(function () { lastHourly = null; render(); });
+      }
+      function tickQuota() {
+        if (!quotaEnabled()) {
+          lastQuota = null;
+          render();
+          return;
+        }
+        invoke("quota_stats")
+          .then(function (d) { lastQuota = d; render(); })
+          .catch(function () { lastQuota = null; render(); });
+      }
 
       /* ---------- 主题 ---------- */
       function applyTheme(p) {
@@ -348,11 +779,22 @@
         var bg = (p && p.bg) || (dark ? "#1a1a1e" : "#ffffff");
         document.documentElement.style.setProperty("--page-bg", bg);
       }
+      function applySettings(s) {
+        if (!s) return;
+        quotaPrefs.kimi = s.stats_quota_kimi !== false;
+        quotaPrefs.opencode = s.stats_quota_opencode !== false;
+      }
       applyTheme(null);
       // event.listen 是异步注册的；先收集 Promise，等全部注册完成再调
       // stats_restore，避免 Rust 立刻回发的主题/模式事件丢失
       var listens = [];
       listens.push(listen("page-theme", function (e) { applyTheme(e.payload); }));
+      listens.push(listen("settings-changed", function (e) {
+        // 设置页切换额度开关：立刻重查或收起，不必等下一次轮询
+        applySettings(e.payload);
+        tickQuota();
+        render();
+      }));
 
       /* ---------- Rust 侧状态同步 ---------- */
       listens.push(listen("stats-mode", function (e) {
@@ -419,8 +861,18 @@
         restoreGeometry();
         tickSession();
         tickDaily();
+        tickHourly();
         setInterval(tickSession, 2000);
         setInterval(tickDaily, 10000);
+        setInterval(tickHourly, 30000);
+        // 先读设置再拉额度：关闭的来源不发请求，避免无谓的错误与进程启动
+        invoke("get_settings")
+          .then(function (s) { applySettings(s); })
+          .catch(function () {})
+          .then(function () {
+            tickQuota();
+            setInterval(tickQuota, 60000);
+          });
       });
     })();
   </script>

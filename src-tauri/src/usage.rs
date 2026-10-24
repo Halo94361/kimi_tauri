@@ -1,9 +1,14 @@
 //! 用量统计：增量解析 ~/.kimi-code 下各会话 agents/*/wire.jsonl，
 //! 聚合 usage.record 计算 token 用量、缓存命中率与 TPS
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::state::{AppState, DailyAgg, DailyStats, SessionAgg, StatsState, WireCursor};
+use tauri::Manager;
+
+use crate::state::{
+    AppState, DailyAgg, DailyStats, HourAgg, HourlyStats, SessionAgg, StatsState, WireCursor,
+};
 
 /// 内容页会话切换上报（SESSION_REPORTER_JS）
 #[tauri::command]
@@ -463,6 +468,203 @@ pub(crate) async fn weekly_stats(
     Ok(serde_json::json!({ "found": found, "days": days_json }))
 }
 
+/* ---------- 近 24 小时按整点分桶（统计浮窗柱图） ---------- */
+
+const HOUR_MS: i64 = 60 * 60 * 1000;
+
+fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 本地时区偏移（毫秒）；与 daily_stats 一致，取不到时回退 UTC
+fn local_offset_ms() -> i64 {
+    use time::UtcOffset;
+    UtcOffset::current_local_offset()
+        .unwrap_or(UtcOffset::UTC)
+        .whole_seconds() as i64
+        * 1000
+}
+
+/// 事件时间落在哪个本地整点：返回该整点的 epoch 毫秒。
+/// div_euclid 处理负偏移（UTC 以西），夏令时切换由调用方每次重算偏移
+fn floor_hour(ms: i64, offset_ms: i64) -> i64 {
+    (ms + offset_ms).div_euclid(HOUR_MS) * HOUR_MS - offset_ms
+}
+
+fn hour_total(h: &HourAgg) -> u64 {
+    let total = |a: &DailyAgg| a.input_other + a.cache_read + a.cache_creation + a.output;
+    total(&h.main) + total(&h.sub)
+}
+
+/// 从游标位置增量读取 wire.jsonl，把窗口内的 usage.record 分到本地整点桶；
+/// 主代理与子代理分开累计，柱图据此堆叠
+fn consume_wire_hourly(
+    offset: &mut u64,
+    buckets: &mut std::collections::BTreeMap<i64, HourAgg>,
+    path: &Path,
+    window_start: i64,
+    current_hour: i64,
+    local_offset: i64,
+    is_main: bool,
+) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    if len < *offset {
+        *offset = 0;
+    }
+    if f.seek(SeekFrom::Start(*offset)).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    if f.read_to_end(&mut buf).is_err() {
+        return false;
+    }
+    let complete = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
+    *offset += complete as u64;
+    let mut found = false;
+    for line in String::from_utf8_lossy(&buf[..complete]).lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("usage.record") {
+            continue;
+        }
+        let Some(t) = v.get("time").and_then(|t| t.as_i64()) else {
+            continue;
+        };
+        if t < window_start {
+            continue;
+        }
+        let Some(u) = v.get("usage") else { continue };
+        let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let bucket = floor_hour(t, local_offset).min(current_hour);
+        let entry = buckets.entry(bucket).or_default();
+        let agg = if is_main {
+            &mut entry.main
+        } else {
+            &mut entry.sub
+        };
+        agg.input_other += get("inputOther");
+        agg.output += get("output");
+        agg.cache_read += get("inputCacheRead");
+        agg.cache_creation += get("inputCacheCreation");
+        found = true;
+    }
+    found
+}
+
+/// 近 24 小时逐整点用量（全部会话，主/子代理分开），供统计浮窗柱图轮询。
+/// 与 daily_stats 一样用增量游标；只扫描 24h 内活跃的文件，滚出窗口的桶
+/// 与对应游标会被丢弃，内存占用有界
+#[tauri::command]
+pub(crate) async fn hourly_stats(app: tauri::AppHandle) -> Result<serde_json::Value, ()> {
+    let value = tauri::async_runtime::spawn_blocking(move || hourly_impl(&app))
+        .await
+        .unwrap_or_else(|_| serde_json::json!({ "found": false }));
+    Ok(value)
+}
+
+fn hourly_impl(app: &tauri::AppHandle) -> serde_json::Value {
+    let state = app.state::<AppState>();
+    if !*state.ready.lock().unwrap() {
+        return serde_json::json!({ "found": false });
+    }
+    let Some(home) = kimi_code_home() else {
+        return serde_json::json!({ "found": false });
+    };
+
+    let offset = local_offset_ms();
+    let current_hour = floor_hour(epoch_ms(), offset);
+    let window_start = current_hour - 23 * HOUR_MS;
+
+    let mut st = state.hourly.lock().unwrap();
+    st.buckets
+        .retain(|t, _| (*t >= window_start) && (*t <= current_hour));
+    let HourlyStats { cursors, buckets } = &mut *st;
+    let mut seen = HashSet::new();
+
+    if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
+        for wd in workdirs.flatten() {
+            let Ok(sessions) = std::fs::read_dir(wd.path()) else {
+                continue;
+            };
+            for sess in sessions.flatten() {
+                let Ok(agents) = std::fs::read_dir(sess.path().join("agents")) else {
+                    continue;
+                };
+                for agent in agents.flatten() {
+                    let wire = agent.path().join("wire.jsonl");
+                    if !wire.is_file() {
+                        continue;
+                    }
+                    // append-only：mtime 早于窗口起点的文件不可能含窗口内事件
+                    let mtime_ms = wire
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    if mtime_ms < window_start {
+                        continue;
+                    }
+                    let is_main = agent.file_name().to_string_lossy() == "main";
+                    seen.insert(wire.clone());
+                    let cursor = cursors.entry(wire.clone()).or_insert(0);
+                    consume_wire_hourly(
+                        cursor,
+                        buckets,
+                        &wire,
+                        window_start,
+                        current_hour,
+                        offset,
+                        is_main,
+                    );
+                }
+            }
+        }
+    }
+    cursors.retain(|p, _| seen.contains(p));
+
+    let mut hours = Vec::with_capacity(24);
+    let mut input_total = 0u64;
+    let mut cache_read_total = 0u64;
+    for i in 0..24 {
+        let t = window_start + i * HOUR_MS;
+        let (main, sub) = match buckets.get(&t) {
+            Some(h) => {
+                let main_input = h.main.input_other + h.main.cache_read + h.main.cache_creation;
+                let sub_input = h.sub.input_other + h.sub.cache_read + h.sub.cache_creation;
+                input_total += main_input + sub_input;
+                cache_read_total += h.main.cache_read + h.sub.cache_read;
+                (main_input + h.main.output, sub_input + h.sub.output)
+            }
+            None => (0, 0),
+        };
+        hours.push(serde_json::json!({ "t": t, "main": main, "sub": sub }));
+    }
+    let cache_hit_rate = if input_total > 0 {
+        cache_read_total as f64 * 100.0 / input_total as f64
+    } else {
+        0.0
+    };
+    let found = buckets.values().any(|h| hour_total(h) > 0);
+    serde_json::json!({
+        "found": found,
+        "start": window_start,
+        "step_ms": HOUR_MS,
+        "hours": hours,
+        "cache_hit_rate": cache_hit_rate,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +688,23 @@ mod tests {
         assert_eq!(bucket_index(&days, 6500), Some(6));
         // 晚于今天的事件归入今天，与 daily_stats 的口径一致
         assert_eq!(bucket_index(&days, 999_999), Some(6));
+    }
+
+    #[test]
+    fn hour_floor_handles_offsets() {
+        // UTC+5:30：整点边界应落在本地 :00，而不是 UTC :00
+        let offset = 5 * HOUR_MS + 30 * 60 * 1000;
+        let t = 1_700_000_000_000;
+        let bucket = floor_hour(t, offset);
+        assert!(bucket <= t);
+        assert!(t - bucket < HOUR_MS);
+        assert_eq!(floor_hour(bucket, offset), bucket);
+        assert_eq!(floor_hour(bucket + HOUR_MS - 1, offset), bucket);
+
+        // UTC-3：负偏移同样对齐
+        let offset = -3 * HOUR_MS;
+        let bucket = floor_hour(t, offset);
+        assert_eq!(floor_hour(bucket, offset), bucket);
+        assert!(t - bucket < HOUR_MS);
     }
 }

@@ -262,7 +262,9 @@
     <section>
       <h2>统计浮窗</h2>
       <label class="check"><input type="checkbox" id="stats_enabled" />显示用量统计浮窗</label>
-      <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。</p>
+      <label class="check"><input type="checkbox" id="stats_quota_kimi" />显示 Kimi 5h / 本周额度</label>
+      <label class="check"><input type="checkbox" id="stats_quota_opencode" />显示 OpenCode Go 额度（需本机 seekfetch）</label>
+      <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。未安装 seekfetch 时 OpenCode 额度会自动隐藏。</p>
       <div class="btns"><button id="resetStats">恢复默认位置</button></div>
     </section>
 
@@ -337,7 +339,7 @@
       $("confirmCancel").addEventListener("click", () => settleConfirm(false));
 
       /* ---------- 设置读写 ---------- */
-      const CHECKS = ["remote_auto_connect", "show_remote_tab", "notifications", "stats_enabled"];
+      const CHECKS = ["remote_auto_connect", "show_remote_tab", "notifications", "stats_enabled", "stats_quota_kimi", "stats_quota_opencode"];
       const SELECTS = ["proxy_mode", "theme"];
       function readForm() {
         const s = {
@@ -345,6 +347,8 @@
           show_remote_tab: $("show_remote_tab").checked,
           notifications: $("notifications").checked,
           stats_enabled: $("stats_enabled").checked,
+          stats_quota_kimi: $("stats_quota_kimi").checked,
+          stats_quota_opencode: $("stats_quota_opencode").checked,
           proxy_mode: $("proxy_mode").value,
           theme: $("theme").value,
           close_to_tray: $("close_to_tray").value === "tray",

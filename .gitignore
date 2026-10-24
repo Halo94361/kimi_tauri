@@ -33,6 +33,8 @@ src-tauri/.cargo/*
 # Python 虚拟环境与脚本生成物
 .venv/
 scripts/exe_icon_check.png
+# 统计浮窗预览截图（scripts/render_stats_preview.py 生成）
+ui/.preview/
 
 # IDE / Editors
 .idea/

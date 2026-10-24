@@ -369,6 +369,12 @@
           "markdownDescription": "Enables the get_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the hourly_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hourly-stats",
+          "markdownDescription": "Enables the hourly_stats command without any pre-configured scope."
+        },
+        {
           "description": "Enables the last_error command without any pre-configured scope.",
           "type": "string",
           "const": "allow-last-error",
@@ -385,6 +391,12 @@
           "type": "string",
           "const": "allow-proxy-status",
           "markdownDescription": "Enables the proxy_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the quota_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-quota-stats",
+          "markdownDescription": "Enables the quota_stats command without any pre-configured scope."
         },
         {
           "description": "Enables the refresh_cli_info command without any pre-configured scope.",
@@ -537,6 +549,12 @@
           "markdownDescription": "Denies the get_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the hourly_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hourly-stats",
+          "markdownDescription": "Denies the hourly_stats command without any pre-configured scope."
+        },
+        {
           "description": "Denies the last_error command without any pre-configured scope.",
           "type": "string",
           "const": "deny-last-error",
@@ -553,6 +571,12 @@
           "type": "string",
           "const": "deny-proxy-status",
           "markdownDescription": "Denies the proxy_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the quota_stats command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-quota-stats",
+          "markdownDescription": "Denies the quota_stats command without any pre-configured scope."
         },
         {
           "description": "Denies the refresh_cli_info command without any pre-configured scope.",

@@ -20,6 +20,8 @@ fn main() {
             "session_stats",
             "daily_stats",
             "weekly_stats",
+            "hourly_stats",
+            "quota_stats",
             "switch_tab",
             "report_theme",
             "sync_theme",

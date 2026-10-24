@@ -5,6 +5,7 @@
 
 mod diagnostics;
 mod inject;
+mod quota;
 mod remote;
 mod server;
 mod settings;
@@ -52,6 +53,8 @@ pub fn run() {
             usage::session_stats,
             usage::daily_stats,
             usage::weekly_stats,
+            usage::hourly_stats,
+            quota::quota_stats,
             window::switch_tab,
             window::report_theme,
             window::sync_theme,

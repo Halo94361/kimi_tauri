@@ -37,6 +37,10 @@ pub(crate) struct Settings {
     pub show_remote_tab: bool,
     pub proxy_mode: ProxyMode,
     pub stats_enabled: bool,
+    /// 统计浮窗展示 Kimi 5h / 本周额度
+    pub stats_quota_kimi: bool,
+    /// 统计浮窗展示 OpenCode Go 额度（需要本机 seekfetch）
+    pub stats_quota_opencode: bool,
     /// true = 关窗隐藏到托盘；false = 关窗直接退出并回收子进程
     pub close_to_tray: bool,
     pub theme: ThemePreference,
@@ -54,6 +58,8 @@ impl Default for Settings {
             show_remote_tab: true,
             proxy_mode: ProxyMode::Auto,
             stats_enabled: true,
+            stats_quota_kimi: true,
+            stats_quota_opencode: true,
             close_to_tray: true,
             theme: ThemePreference::Follow,
             notifications: true,
@@ -93,7 +99,7 @@ fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
 
 /// Windows 的 rename 不能覆盖已存在的目标文件，用 MoveFileEx 替换
 #[cfg(windows)]
-fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -109,7 +115,7 @@ fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(windows))]
-fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
+pub(crate) fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
     std::fs::rename(tmp, dest)
 }
 
@@ -140,8 +146,8 @@ fn apply(app: &AppHandle, mut next: Settings) -> Result<Settings, String> {
         *cur = next.clone();
         prev
     };
-    // 只发给选项卡栏与设置页：远端托管页不应读到本机设置
-    for label in ["tabbar", "settings"] {
+    // 只发给壳自绘页面：远端托管页不应读到本机设置
+    for label in ["tabbar", "settings", "stats"] {
         let _ = app.emit_to(label, "settings-changed", &next);
     }
     crate::window::apply_settings(app, &prev, &next);
@@ -159,6 +165,8 @@ mod tests {
         assert!(s.remote_auto_connect);
         assert!(s.show_remote_tab);
         assert!(s.stats_enabled);
+        assert!(s.stats_quota_kimi);
+        assert!(s.stats_quota_opencode);
         assert!(s.close_to_tray);
         assert!(s.notifications);
         assert_eq!(s.proxy_mode, ProxyMode::Auto);
@@ -174,6 +182,8 @@ mod tests {
             show_remote_tab: false,
             proxy_mode: ProxyMode::Off,
             stats_enabled: false,
+            stats_quota_kimi: false,
+            stats_quota_opencode: false,
             close_to_tray: false,
             theme: ThemePreference::Light,
             notifications: false,

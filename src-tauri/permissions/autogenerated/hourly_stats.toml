@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hourly-stats"
+description = "Enables the hourly_stats command without any pre-configured scope."
+commands.allow = ["hourly_stats"]
+
+[[permission]]
+identifier = "deny-hourly-stats"
+description = "Denies the hourly_stats command without any pre-configured scope."
+commands.deny = ["hourly_stats"]

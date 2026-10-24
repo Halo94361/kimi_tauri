@@ -86,13 +86,13 @@ def build_fixtures_js() -> str:
             "kimi": {
                 "ok": True,
                 "five_hour": {
-                    "used_pct": 49.2,
-                    "reset_at": int(now + 1 * hour + 52 * 60_000),
+                    "used_pct": 13.0,
+                    "reset_at": int(now + 32 * 60_000),
                     "window_ms": 5 * hour,
                 },
                 "weekly": {
-                    "used_pct": 16.0,
-                    "reset_at": int(now + 5 * day + 19 * hour),
+                    "used_pct": 19.0,
+                    "reset_at": int(now + 6 * day + 18 * hour),
                     "window_ms": 7 * day,
                 },
                 "fetched_at": int(now),

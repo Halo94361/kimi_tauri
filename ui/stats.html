@@ -31,6 +31,7 @@
       --divider: rgba(255, 255, 255, 0.08);
       --accent: #1a88ff;
       --green: #16c456;
+      --oc-dot: #ff6b9d;
       --orange: #ff9f0a;
       --danger: #ff4756;
       --tabbar-bg: #1a1a1e;
@@ -53,6 +54,7 @@
       --divider: rgba(0, 0, 0, 0.07);
       --accent: #1783ff;
       --green: #0fae4a;
+      --oc-dot: #d94f8a;
       --orange: #f08a00;
       --danger: #e5374a;
       --tabbar-bg: #ffffff;
@@ -207,7 +209,7 @@
       border-radius: 50%;
     }
     .brand-dot.kimi { background: var(--accent); }
-    .brand-dot.oc { background: var(--green); }
+    .brand-dot.oc { background: var(--oc-dot); }
     .divider {
       height: 1px;
       margin: 8px 0 7px;
@@ -587,6 +589,22 @@
             Math.round(share * 100) + "%"
         };
       }
+      /* Kimi 本周按整天步进，不看小时：周额度 7 天均分。
+         剩余时间向下取整到天，当前第 N 天 = 7 - floor(剩余天数)，
+         线 = N / 7，代表到当天结束为止的累计上限。
+         例：剩 6d18h → 第 1 天 → 14.3%；剩 0d18h → 第 7 天 → 100% */
+      function weekDayPace(q) {
+        if (!q || !q.reset_at || !q.window_ms) return null;
+        var dayMs = 24 * 60 * 60 * 1000;
+        var remainingDays = Math.floor((q.reset_at - Date.now()) / dayMs);
+        var dayIndex = Math.min(7, Math.max(1, 7 - remainingDays));
+        var pct = (dayIndex / 7) * 100;
+        return {
+          pct: pct,
+          title: "周额度按 7 天均分：第 " + dayIndex + " 天，累计上限 " +
+            pct.toFixed(1) + "%"
+        };
+      }
       function quotaRow(label, q, pace) {
         if (!q || typeof q.used_pct !== "number") return "";
         var p = Math.max(0, Math.min(100, q.used_pct));
@@ -698,7 +716,8 @@
         var plans = "";
         if (statsPrefs.kimi) {
           plans += planBlock("kimi", "Kimi Code", "5h · 本周", kimi, [
-            ["5 小时", "five_hour"], ["本周", "weekly"]
+            ["5 小时", "five_hour"],
+            ["本周", "weekly", function (d) { return weekDayPace(d); }]
           ]);
         }
         if (ocVisible) {

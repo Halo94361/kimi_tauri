@@ -387,26 +387,37 @@
       let visible = false;
       let open = false;
       let lastData = null, lastDaily = null, lastHourly = null, lastQuota = null;
-      // 设置里的额度展示开关：默认开，get_settings 返回后再校正
-      let quotaPrefs = { kimi: true, opencode: true };
+      // 设置里的展示开关与额度轮询周期：默认全开、120s，get_settings 返回后校正
+      let statsPrefs = { usage: true, kimi: true, opencode: true, refreshMs: 120000 };
+      let quotaTimer = 0;
       let lastW = 0, lastH = 0;
       let appliedH = 0;
       let sizePending = false;
 
+      function usageEnabled() {
+        return statsPrefs.usage;
+      }
+
       function quotaEnabled() {
-        return quotaPrefs.kimi || quotaPrefs.opencode;
+        return statsPrefs.kimi || statsPrefs.opencode;
+      }
+
+      function hasUsageData() {
+        return statsPrefs.usage && (
+          (lastData && lastData.found) || (lastDaily && lastDaily.found)
+        );
       }
 
       function hasQuota(q) {
         if (!quotaEnabled()) return false;
         return !!q && (
-          (quotaPrefs.kimi && q.kimi && q.kimi.ok) ||
-          (quotaPrefs.opencode && q.opencode && q.opencode.ok)
+          (statsPrefs.kimi && q.kimi && q.kimi.ok) ||
+          (statsPrefs.opencode && q.opencode && q.opencode.ok)
         );
       }
 
       function onKimiData() {
-        return (lastData && lastData.found) || (lastDaily && lastDaily.found) || hasQuota(lastQuota);
+        return hasUsageData() || hasQuota(lastQuota);
       }
 
       function setVisible(v) {
@@ -653,7 +664,8 @@
 
       function render() {
         var d = lastData, daily = lastDaily;
-        var sFound = d && d.found, dFound = daily && daily.found;
+        var sFound = usageEnabled() && d && d.found;
+        var dFound = usageEnabled() && daily && daily.found;
         var quota = lastQuota || {};
         var kimi = quota.kimi || null, oc = quota.opencode || null;
         if (!onKimiData()) {
@@ -671,19 +683,19 @@
         } else if (dFound) {
           barHtml = "今日 ↑" + barValue(fmt(daily.input_total)) + " ↓" + barValue(fmt(daily.output_total)) +
             " · 缓存 " + barValue(pctText(daily.cache_hit_rate));
-        } else if (quotaPrefs.kimi && kimi && kimi.ok) {
+        } else if (statsPrefs.kimi && kimi && kimi.ok) {
           barHtml = "Kimi 5h " + barValue(pctText(kimi.five_hour && kimi.five_hour.used_pct)) +
             " · 本周 " + barValue(pctText(kimi.weekly && kimi.weekly.used_pct));
-        } else if (quotaPrefs.opencode && oc && oc.ok && oc.configured !== false) {
+        } else if (statsPrefs.opencode && oc && oc.ok && oc.configured !== false) {
           barHtml = "OpenCode 5h " + barValue(pctText(oc.rolling && oc.rolling.used_pct)) +
             " · 本周 " + barValue(pctText(oc.weekly && oc.weekly.used_pct));
         }
         barText.innerHTML = barHtml;
 
         var html = "";
-        var ocVisible = quotaPrefs.opencode && !(oc && oc.configured === false);
+        var ocVisible = statsPrefs.opencode && !(oc && oc.configured === false);
         var plans = "";
-        if (quotaPrefs.kimi) {
+        if (statsPrefs.kimi) {
           plans += planBlock("kimi", "Kimi Code", "5h · 本周", kimi, [
             ["5 小时", "five_hour"], ["本周", "weekly"]
           ]);
@@ -697,9 +709,9 @@
           ]);
         }
         if (plans) {
-          var stale = (quotaPrefs.kimi && kimi && kimi.stale) || (ocVisible && oc && oc.stale);
+          var stale = (statsPrefs.kimi && kimi && kimi.stale) || (ocVisible && oc && oc.stale);
           var staleTitle = [
-            quotaPrefs.kimi && kimi && kimi.warning,
+            statsPrefs.kimi && kimi && kimi.warning,
             ocVisible && oc && oc.warning
           ].filter(Boolean).join(" / ");
           html += '<div class="section"><span>套餐额度</span>' +
@@ -707,7 +719,7 @@
           html += '<div class="card">' + plans + "</div>";
         }
 
-        if (lastHourly) {
+        if (usageEnabled() && lastHourly) {
           if (lastHourly.found) {
             html += chartBlock(lastHourly);
           } else {
@@ -727,16 +739,18 @@
           ]);
         }
 
-        html += section("今日 · 全部会话", "");
-        if (dFound) {
-          html += grid([
-            cell("输入合计", fmt(daily.input_total)),
-            cell("输出合计", fmt(daily.output_total)),
-            cell("缓存命中", pctText(daily.cache_hit_rate)),
-            cell("缓存读", fmt(daily.cache_read))
-          ]);
-        } else {
-          html += '<div class="empty">暂无数据</div>';
+        if (usageEnabled()) {
+          html += section("今日 · 全部会话", "");
+          if (dFound) {
+            html += grid([
+              cell("输入合计", fmt(daily.input_total)),
+              cell("输出合计", fmt(daily.output_total)),
+              cell("缓存命中", pctText(daily.cache_hit_rate)),
+              cell("缓存读", fmt(daily.cache_read))
+            ]);
+          } else {
+            html += '<div class="empty">暂无数据</div>';
+          }
         }
 
         detailBody.innerHTML = html;
@@ -746,16 +760,19 @@
 
       /* ---------- 轮询 ---------- */
       function tickSession() {
+        if (!usageEnabled()) return;
         invoke("session_stats")
           .then(function (d) { lastData = d; render(); })
           .catch(function () { lastData = null; render(); });
       }
       function tickDaily() {
+        if (!usageEnabled()) return;
         invoke("daily_stats")
           .then(function (d) { lastDaily = d; render(); })
           .catch(function () { lastDaily = null; render(); });
       }
       function tickHourly() {
+        if (!usageEnabled()) return;
         invoke("hourly_stats")
           .then(function (d) { lastHourly = d; render(); })
           .catch(function () { lastHourly = null; render(); });
@@ -781,8 +798,15 @@
       }
       function applySettings(s) {
         if (!s) return;
-        quotaPrefs.kimi = s.stats_quota_kimi !== false;
-        quotaPrefs.opencode = s.stats_quota_opencode !== false;
+        statsPrefs.usage = s.stats_show_usage !== false;
+        statsPrefs.kimi = s.stats_quota_kimi !== false;
+        statsPrefs.opencode = s.stats_quota_opencode !== false;
+        var secs = Number(s.stats_quota_refresh_secs);
+        statsPrefs.refreshMs = (isFinite(secs) && secs >= 30 ? Math.min(secs, 3600) : 120) * 1000;
+      }
+      function scheduleQuota() {
+        if (quotaTimer) clearInterval(quotaTimer);
+        quotaTimer = setInterval(tickQuota, statsPrefs.refreshMs);
       }
       applyTheme(null);
       // event.listen 是异步注册的；先收集 Promise，等全部注册完成再调
@@ -790,8 +814,18 @@
       var listens = [];
       listens.push(listen("page-theme", function (e) { applyTheme(e.payload); }));
       listens.push(listen("settings-changed", function (e) {
-        // 设置页切换额度开关：立刻重查或收起，不必等下一次轮询
+        // 设置页切换展示开关 / 刷新间隔：立即应用并重排定时器
         applySettings(e.payload);
+        scheduleQuota();
+        if (usageEnabled()) {
+          tickSession();
+          tickDaily();
+          tickHourly();
+        } else {
+          lastData = null;
+          lastDaily = null;
+          lastHourly = null;
+        }
         tickQuota();
         render();
       }));
@@ -859,19 +893,19 @@
       }
       Promise.all(listens).catch(function () {}).then(function () {
         restoreGeometry();
-        tickSession();
-        tickDaily();
-        tickHourly();
-        setInterval(tickSession, 2000);
-        setInterval(tickDaily, 10000);
-        setInterval(tickHourly, 30000);
-        // 先读设置再拉额度：关闭的来源不发请求，避免无谓的错误与进程启动
+        // 先读设置：关闭的来源不发请求，额度按配置的间隔轮询
         invoke("get_settings")
           .then(function (s) { applySettings(s); })
           .catch(function () {})
           .then(function () {
+            tickSession();
+            tickDaily();
+            tickHourly();
             tickQuota();
-            setInterval(tickQuota, 60000);
+            scheduleQuota();
+            setInterval(tickSession, 2000);
+            setInterval(tickDaily, 10000);
+            setInterval(tickHourly, 30000);
           });
       });
     })();

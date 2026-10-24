@@ -262,9 +262,14 @@
     <section>
       <h2>统计浮窗</h2>
       <label class="check"><input type="checkbox" id="stats_enabled" />显示用量统计浮窗</label>
+      <label class="check"><input type="checkbox" id="stats_show_usage" />显示用量（会话 / 今日 / 24h 柱图）</label>
       <label class="check"><input type="checkbox" id="stats_quota_kimi" />显示 Kimi 5h / 本周额度</label>
-      <label class="check"><input type="checkbox" id="stats_quota_opencode" />显示 OpenCode Go 额度（需本机 seekfetch）</label>
-      <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。未安装 seekfetch 时 OpenCode 额度会自动隐藏。</p>
+      <label class="check"><input type="checkbox" id="stats_quota_opencode" />显示 OpenCode Go 额度（读取 config.toml 的 provider key）</label>
+      <div class="row"><span class="label">额度刷新间隔</span>
+        <input type="number" id="stats_quota_refresh_secs" min="30" max="3600" step="10" />
+        <span class="hint" style="margin:0">秒；默认 120，最小 30</span>
+      </div>
+      <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。未找到 OpenCode key 时回退 seekfetch，两者都没有则自动隐藏。</p>
       <div class="btns"><button id="resetStats">恢复默认位置</button></div>
     </section>
 
@@ -339,7 +344,7 @@
       $("confirmCancel").addEventListener("click", () => settleConfirm(false));
 
       /* ---------- 设置读写 ---------- */
-      const CHECKS = ["remote_auto_connect", "show_remote_tab", "notifications", "stats_enabled", "stats_quota_kimi", "stats_quota_opencode"];
+      const CHECKS = ["remote_auto_connect", "show_remote_tab", "notifications", "stats_enabled", "stats_show_usage", "stats_quota_kimi", "stats_quota_opencode"];
       const SELECTS = ["proxy_mode", "theme"];
       function readForm() {
         const s = {
@@ -347,8 +352,10 @@
           show_remote_tab: $("show_remote_tab").checked,
           notifications: $("notifications").checked,
           stats_enabled: $("stats_enabled").checked,
+          stats_show_usage: $("stats_show_usage").checked,
           stats_quota_kimi: $("stats_quota_kimi").checked,
           stats_quota_opencode: $("stats_quota_opencode").checked,
+          stats_quota_refresh_secs: Math.max(30, Math.min(3600, parseInt($("stats_quota_refresh_secs").value, 10) || 120)),
           proxy_mode: $("proxy_mode").value,
           theme: $("theme").value,
           close_to_tray: $("close_to_tray").value === "tray",
@@ -365,6 +372,9 @@
         // 正在编辑的输入框不被后台事件覆盖
         if (document.activeElement !== $("kimi_path")) $("kimi_path").value = s.kimi_path || "";
         if (document.activeElement !== $("kimi_port")) $("kimi_port").value = s.kimi_port || 0;
+        if (document.activeElement !== $("stats_quota_refresh_secs")) {
+          $("stats_quota_refresh_secs").value = s.stats_quota_refresh_secs || 120;
+        }
         renderProxyMode(s.proxy_mode);
       }
       async function save() {
@@ -376,6 +386,7 @@
       $("close_to_tray").addEventListener("change", save);
       $("kimi_path").addEventListener("change", save);
       $("kimi_port").addEventListener("change", save);
+      $("stats_quota_refresh_secs").addEventListener("change", save);
 
       /* ---------- 诊断状态 ---------- */
       let diag = null;

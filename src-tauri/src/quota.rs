@@ -27,10 +27,11 @@ const MONTH_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 const SEEKFETCH_TIMEOUT: Duration = Duration::from_secs(8);
-/// Kimi 额度变化慢，60s 轮询下 45s 缓存仍能保证每次取新值
-const KIMI_CACHE_TTL: Duration = Duration::from_secs(45);
-/// seekfetch 要起进程 + 走网络，缓存久一点
-const OPENCODE_CACHE_TTL: Duration = Duration::from_secs(120);
+/// 缓存略短于页面轮询间隔：下一次轮询必定重新取数，
+/// 同时吸收设置页切换、手动重试等重复调用
+fn cache_ttl(refresh_secs: u64) -> Duration {
+    Duration::from_secs(refresh_secs.clamp(30, 3600).saturating_sub(5).max(5))
+}
 /// token 距过期不足该值时提前刷新，避免请求撞在过期边界上
 const REFRESH_MARGIN_SECS: i64 = 120;
 
@@ -62,6 +63,8 @@ pub(crate) async fn quota_stats(force: Option<bool>, app: AppHandle) -> Result<V
 struct QuotaError {
     message: String,
     configured: bool,
+    /// 直连失败是否值得回退 seekfetch（仅网络层错误，401/解析错误不回退）
+    fallback: bool,
 }
 
 impl QuotaError {
@@ -69,6 +72,15 @@ impl QuotaError {
         Self {
             message: message.into(),
             configured: true,
+            fallback: false,
+        }
+    }
+
+    fn network(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            configured: true,
+            fallback: true,
         }
     }
 
@@ -76,6 +88,7 @@ impl QuotaError {
         Self {
             message: message.into(),
             configured: false,
+            fallback: false,
         }
     }
 }
@@ -84,10 +97,15 @@ fn fetch_all(app: &AppHandle, force: bool) -> Value {
     let state = app.state::<AppState>();
     // 串行化：两个来源之外只允许一个查询在跑，失败重试不会叠成并发风暴
     let _guard = state.quota_lock.lock().unwrap();
-    let (kimi_enabled, opencode_enabled) = {
+    let (kimi_enabled, opencode_enabled, refresh_secs) = {
         let settings = state.settings.lock().unwrap();
-        (settings.stats_quota_kimi, settings.stats_quota_opencode)
+        (
+            settings.stats_quota_kimi,
+            settings.stats_quota_opencode,
+            settings.stats_quota_refresh_secs,
+        )
     };
+    let ttl = cache_ttl(refresh_secs);
 
     let kimi = if !kimi_enabled {
         json!({ "ok": false, "disabled": true })
@@ -98,7 +116,7 @@ fn fetch_all(app: &AppHandle, force: bool) -> Value {
         } else {
             cached
                 .as_ref()
-                .filter(|(at, _)| at.elapsed() < KIMI_CACHE_TTL)
+                .filter(|(at, _)| at.elapsed() < ttl)
                 .map(|(_, v)| v.clone())
         };
         hit.unwrap_or_else(|| match fetch_kimi() {
@@ -119,7 +137,7 @@ fn fetch_all(app: &AppHandle, force: bool) -> Value {
         } else {
             cached
                 .as_ref()
-                .filter(|(at, _)| at.elapsed() < OPENCODE_CACHE_TTL)
+                .filter(|(at, _)| at.elapsed() < ttl)
                 .map(|(_, v)| v.clone())
         };
         hit.unwrap_or_else(|| match fetch_opencode() {
@@ -230,7 +248,7 @@ fn request_usages(
         .bearer_auth(access)
         .header("Accept", "application/json")
         .send()
-        .map_err(|e| format!("Kimi 额度请求失败：{e}"))
+        .map_err(|e| format!("Kimi 额度请求失败：{}", error_chain(&e)))
 }
 
 fn is_auth_error(resp: &reqwest::blocking::Response) -> bool {
@@ -249,7 +267,7 @@ fn refresh_access(path: &Path, used_refresh: &str) -> Result<String, QuotaError>
             ("refresh_token", used_refresh),
         ])
         .send()
-        .map_err(|e| QuotaError::new(format!("Kimi 登录刷新失败：{e}")))?;
+        .map_err(|e| QuotaError::new(format!("Kimi 登录刷新失败：{}", error_chain(&e))))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(QuotaError::new(format!(
@@ -341,6 +359,19 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|e| format!("HTTP 客户端初始化失败：{e}"))
 }
 
+/// reqwest 的顶层 message 经常只有 "error sending request"，把 source 链拼上
+/// 才能看出是证书、DNS 还是连接被重置；不包含 URL 之外的请求头信息
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        out.push_str(": ");
+        out.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    out
+}
+
 /// 兼容两种响应形态：
 /// - 新版 `usages.limit_5h / limit_7d`（snake_case，used_ratio 为 0..1）
 /// - 旧版 `limits[]`（5h）+ `usage`（本周，used/limit 为整数字符串）
@@ -429,7 +460,102 @@ fn reset_at(v: &Value) -> Option<i64> {
 
 /* ---------- OpenCode Go（seekfetch） ---------- */
 
+const OPENCODE_USAGE_API: &str = "https://opencode.ai/zen/go/v1/usage";
+
+/// OpenCode 额度：优先直连官方接口（key 来自 CLI 的 config.toml），
+/// 找不到 key 时才回退 seekfetch 的加密凭据库
 fn fetch_opencode() -> Result<Value, QuotaError> {
+    let Some(key) = opencode_key_from_config_file() else {
+        return fetch_opencode_via_seekfetch();
+    };
+    match fetch_opencode_direct(&key) {
+        Ok(v) => Ok(v),
+        Err(direct_err) if direct_err.fallback => {
+            // 直连网络层失败（证书吊销检查、代理等）时用 seekfetch 兜底；
+            // 401 / 解析错误说明 key 或接口本身有问题，不掩盖
+            match fetch_opencode_via_seekfetch() {
+                Ok(v) => Ok(v),
+                Err(fallback_err) if fallback_err.configured => Err(fallback_err),
+                Err(_) => Err(direct_err),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn opencode_key_from_config_file() -> Option<String> {
+    let home = kimi_code_home()?;
+    let text = std::fs::read_to_string(home.join("config.toml")).ok()?;
+    opencode_key_from_config(&text)
+}
+
+/// 从 CLI 的 config.toml 里找 OpenCode Go provider 的 api_key。
+/// 先按 provider 名（包含 opencode）找；再兼容改过名字、但 base_url
+/// 指向本地 opencode-session-proxy 的配置。
+fn opencode_key_from_config(text: &str) -> Option<String> {
+    let root: toml::Value = text.parse().ok()?;
+    let providers = root.get("providers")?.as_table()?;
+    let key_of = |provider: &toml::Value| {
+        provider
+            .get("api_key")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+    };
+    // 用户配置里通常叫 "OpenCode Go"；先精确匹配，避免误取 Zen / 其他同类 provider
+    for (name, provider) in providers {
+        if name.eq_ignore_ascii_case("opencode go") {
+            if let Some(key) = key_of(provider) {
+                return Some(key);
+            }
+        }
+    }
+    for (name, provider) in providers {
+        if name.to_lowercase().contains("opencode") {
+            if let Some(key) = key_of(provider) {
+                return Some(key);
+            }
+        }
+    }
+    for provider in providers.values() {
+        let base = provider
+            .get("base_url")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("");
+        if base.contains("127.0.0.1:58787") || base.contains("localhost:58787") {
+            if let Some(key) = key_of(provider) {
+                return Some(key);
+            }
+        }
+    }
+    None
+}
+
+fn fetch_opencode_direct(key: &str) -> Result<Value, QuotaError> {
+    let client = http_client().map_err(QuotaError::new)?;
+    let resp = client
+        .get(OPENCODE_USAGE_API)
+        .bearer_auth(key)
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|e| QuotaError::network(format!("OpenCode 额度请求失败：{}", error_chain(&e))))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let message = match status.as_u16() {
+            401 | 403 => "OpenCode Go 的 key 已失效，请在 config.toml 中更新".to_string(),
+            404 => "OpenCode 额度接口不存在（上游可能已变更）".to_string(),
+            code => format!("OpenCode 额度接口返回 HTTP {code}"),
+        };
+        return Err(QuotaError::new(message));
+    }
+    let body: Value = resp
+        .json()
+        .map_err(|e| QuotaError::new(format!("OpenCode 额度响应解析失败：{e}")))?;
+    parse_opencode_usage(&body).map_err(QuotaError::new)
+}
+
+fn fetch_opencode_via_seekfetch() -> Result<Value, QuotaError> {
     let bin = find_seekfetch();
     let out = match run_with_timeout(&bin, &["opencode", "usage", "--json"], SEEKFETCH_TIMEOUT) {
         Ok(out) => out,
@@ -745,6 +871,41 @@ mod tests {
         assert_eq!(v["configured"], false);
         let v = stale_or_error(None, QuotaError::new("network down"));
         assert_eq!(v["configured"], true);
+    }
+
+    #[test]
+    fn extracts_opencode_key_from_config() {
+        let text = r#"
+[providers.zhipu]
+api_key = "test-zhipu"
+
+[providers."OpenCode Go"]
+type = "openai"
+api_key = "test-opencode"
+base_url = "http://127.0.0.1:58787/openai/v1"
+"#;
+        assert_eq!(
+            opencode_key_from_config(text).as_deref(),
+            Some("test-opencode")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_session_proxy_base_url() {
+        let text = r#"
+[providers."Custom"]
+api_key = "test-proxy"
+base_url = "http://localhost:58787/openai/v1"
+"#;
+        assert_eq!(
+            opencode_key_from_config(text).as_deref(),
+            Some("test-proxy")
+        );
+        assert_eq!(opencode_key_from_config("not toml"), None);
+        assert_eq!(
+            opencode_key_from_config("[providers.\"OpenCode Go\"]\napi_key = \"  \""),
+            None
+        );
     }
 
     #[test]

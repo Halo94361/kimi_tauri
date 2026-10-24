@@ -3825,6 +3825,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "time",
+ "toml 0.8.2",
  "windows-sys 0.59.0",
 ]
 

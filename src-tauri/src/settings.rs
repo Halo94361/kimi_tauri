@@ -37,10 +37,14 @@ pub(crate) struct Settings {
     pub show_remote_tab: bool,
     pub proxy_mode: ProxyMode,
     pub stats_enabled: bool,
+    /// 统计浮窗展示会话/今日 token 与 24h 柱图
+    pub stats_show_usage: bool,
     /// 统计浮窗展示 Kimi 5h / 本周额度
     pub stats_quota_kimi: bool,
     /// 统计浮窗展示 OpenCode Go 额度（需要本机 seekfetch）
     pub stats_quota_opencode: bool,
+    /// 套餐额度刷新间隔（秒），页面按此周期轮询，后端缓存略短于它
+    pub stats_quota_refresh_secs: u64,
     /// true = 关窗隐藏到托盘；false = 关窗直接退出并回收子进程
     pub close_to_tray: bool,
     pub theme: ThemePreference,
@@ -58,8 +62,10 @@ impl Default for Settings {
             show_remote_tab: true,
             proxy_mode: ProxyMode::Auto,
             stats_enabled: true,
+            stats_show_usage: true,
             stats_quota_kimi: true,
             stats_quota_opencode: true,
+            stats_quota_refresh_secs: 120,
             close_to_tray: true,
             theme: ThemePreference::Follow,
             notifications: true,
@@ -138,6 +144,8 @@ pub(crate) fn reset_settings(app: AppHandle) -> Result<Settings, String> {
 /// 端口 / kimi 路径这类「下次重启服务生效」的字段只保存，不在这里处理
 fn apply(app: &AppHandle, mut next: Settings) -> Result<Settings, String> {
     next.kimi_path = next.kimi_path.trim().to_string();
+    // 页面按此周期轮询额度；下限 30s，防止误填 0 把接口打成压力测试
+    next.stats_quota_refresh_secs = next.stats_quota_refresh_secs.clamp(30, 3600);
     save(app, &next)?;
     let prev = {
         let state = app.state::<AppState>();
@@ -165,8 +173,10 @@ mod tests {
         assert!(s.remote_auto_connect);
         assert!(s.show_remote_tab);
         assert!(s.stats_enabled);
+        assert!(s.stats_show_usage);
         assert!(s.stats_quota_kimi);
         assert!(s.stats_quota_opencode);
+        assert_eq!(s.stats_quota_refresh_secs, 120);
         assert!(s.close_to_tray);
         assert!(s.notifications);
         assert_eq!(s.proxy_mode, ProxyMode::Auto);
@@ -182,8 +192,10 @@ mod tests {
             show_remote_tab: false,
             proxy_mode: ProxyMode::Off,
             stats_enabled: false,
+            stats_show_usage: false,
             stats_quota_kimi: false,
             stats_quota_opencode: false,
+            stats_quota_refresh_secs: 300,
             close_to_tray: false,
             theme: ThemePreference::Light,
             notifications: false,
@@ -196,6 +208,8 @@ mod tests {
         assert!(!back.show_remote_tab);
         assert_eq!(back.proxy_mode, ProxyMode::Off);
         assert_eq!(back.theme, ThemePreference::Light);
+        assert_eq!(back.stats_quota_refresh_secs, 300);
+        assert!(!back.stats_show_usage);
         assert_eq!(back.kimi_port, 59000);
         assert_eq!(back.kimi_path, r"C:\tools\kimi.exe");
     }

@@ -6,16 +6,16 @@
 
 - 原生窗口 + WebView2，不打包前端；`kimi upgrade` 后界面自动更新
 - 顶部选项卡：本地 `kimi web` 与远端 `https://code-rc.kimi.com/` 会话同时存活
-- 设置选项卡：rc 自动开启与手动连接/断开、远端选项卡显隐、kimi 路径与端口、OpenCode Go 代理策略、关窗行为、壳主题、通知、统计浮窗与 Kimi / OpenCode 额度展示开关、近 7 天用量图，以及状态诊断与二次确认后的一键升级 CLI
+- 设置选项卡：rc 自动开启与手动连接/断开、远端选项卡显隐、kimi 路径与端口、OpenCode Go 代理策略、关窗行为、壳主题、通知、统计浮窗与用量 / Kimi / OpenCode 额度展示开关、额度刷新间隔、近 7 天用量图，以及状态诊断与二次确认后的一键升级 CLI
 - 系统托盘驻留，关窗不退出；托盘菜单含设置与重启本地服务入口，“退出”统一回收子进程
 - Web 通知、F5 / Ctrl+R 刷新、原生文件拖放、外链走系统浏览器
-- 实时用量悬浮窗：TPS、会话与今日 token、缓存命中率、Kimi 5h/周额度、OpenCode Go 滚动/周/月额度、近 24 小时堆叠柱图；额度条带匀速参考线（OpenCode 按本月已用折算）
+- 实时用量悬浮窗：TPS、会话与今日 token、缓存命中率、Kimi 5h/周额度、OpenCode Go 滚动/周/月额度、近 24 小时堆叠柱图；额度条带匀速参考线（OpenCode 按本月已用折算），额度默认 120 秒刷新、可在设置中调整
 
 ## 环境要求
 
 - Windows 10 (1809+) / Windows 11，已安装 Edge WebView2 Runtime
 - Kimi Code CLI（`kimi`，且 `kimi web` 可用）
-- OpenCode Go 额度展示需要本机 `seekfetch`（`seekfetch opencode usage --json` 可用）；未安装时该模块自动隐藏，也可在设置中关闭
+- OpenCode Go 额度优先读取 `~/.kimi-code/config.toml` 中 `[providers."OpenCode Go"].api_key` 直连官方接口；没有 key 或直连网络层失败时回退 `seekfetch opencode usage`，两者都不可用则自动隐藏
 - 构建时需要 Rust 工具链与 `cargo-tauri`
 
 ## 构建与运行

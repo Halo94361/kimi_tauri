@@ -119,8 +119,10 @@ def build_fixtures_js() -> str:
         },
         "get_settings": {
             "stats_enabled": True,
+            "stats_show_usage": True,
             "stats_quota_kimi": True,
             "stats_quota_opencode": True,
+            "stats_quota_refresh_secs": 120,
         },
     }
     return (

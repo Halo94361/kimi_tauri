@@ -119,11 +119,11 @@
       margin-bottom: 14px;
     }
     .banner[hidden] { display: none; }
-    /* 近 7 天用量：纯 div 柱状图，输入/输出堆叠 */
+    /* 近 14 天用量：纯 div 柱状图，按模型分色堆叠 */
     #weekChart {
       display: flex;
       align-items: flex-end;
-      gap: 10px;
+      gap: 4px;
       height: 120px;
       padding: 8px 2px 0;
     }
@@ -137,23 +137,29 @@
       height: 100%;
       min-width: 0;
     }
-    .day .total { font-size: 11px; color: var(--muted); }
+    .day .total { font-size: 10px; color: var(--muted); white-space: nowrap; }
     .day .stack {
       display: flex;
       flex-direction: column;
       justify-content: flex-end;
       width: 100%;
-      max-width: 34px;
+      max-width: 28px;
       border-radius: 4px 4px 0 0;
       overflow: hidden;
     }
-    .day .in { background: var(--accent); }
-    .day .out { background: var(--muted); opacity: 0.55; }
-    .day .date { font-size: 11px; color: var(--muted); white-space: nowrap; }
-    .legend { color: var(--muted); font-size: 12px; margin-top: 8px; }
-    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 12px; }
-    .legend i.in { background: var(--accent); }
-    .legend i.out { background: var(--muted); opacity: 0.55; }
+    .day .date { font-size: 10px; color: var(--muted); white-space: nowrap; }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 5px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 8px;
+    }
+    #weekModels { display: contents; }
+    .legend .model-item { display: inline-flex; align-items: center; gap: 4px; }
+    .legend i { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 2px; }
     #toast {
       position: fixed;
       left: 50%;
@@ -196,6 +202,13 @@
       <span class="grow">kimi 路径或端口已修改，重启本地服务后才会生效。</span>
       <button id="restartNow" class="primary">立即重启</button>
     </div>
+
+    <section>
+      <h2>近 14 天用量</h2>
+      <div id="weekChart"></div>
+      <div class="legend"><span id="weekModels"></span><span id="weekSummary"></span></div>
+      <div class="btns"><button id="refreshWeek">刷新用量</button></div>
+    </section>
 
     <section>
       <h2>远程控制（rc 隧道）</h2>
@@ -271,13 +284,6 @@
       </div>
       <p class="hint">浮窗位置、吸附与折叠状态仍由各页面自己记住；设置页打开时浮窗自动隐藏。未找到 OpenCode key 时回退 seekfetch，两者都没有则自动隐藏。</p>
       <div class="btns"><button id="resetStats">恢复默认位置</button></div>
-    </section>
-
-    <section>
-      <h2>近 7 天用量</h2>
-      <div id="weekChart"></div>
-      <div class="legend">输入（含缓存）<i class="in"></i>输出<i class="out"></i><span id="weekSummary" style="margin-left:12px"></span></div>
-      <div class="btns"><button id="refreshWeek">刷新用量</button></div>
     </section>
 
     <section>
@@ -428,7 +434,11 @@
       // 提示条的「立即重启」复用重启按钮的确认流程
       $("restartNow").addEventListener("click", () => $("restartServer").click());
 
-      /* ---------- 近 7 天用量 ---------- */
+      /* ---------- 近 14 天用量 ---------- */
+      const MODEL_COLORS = [
+        "#1783ff", "#f59e0b", "#10b981", "#a855f7", "#ef4444", "#06b6d4",
+        "#ec4899", "#84cc16", "#f97316", "#8b5cf6", "#14b8a6", "#eab308"
+      ];
       function fmtTokens(n) {
         if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
         if (n >= 1000) return (n / 1000).toFixed(1) + "K";
@@ -436,29 +446,60 @@
       }
       function renderWeek(data) {
         const chart = $("weekChart");
-        chart.innerHTML = "";
+        chart.replaceChildren();
         const days = (data && data.days) || [];
+        const modelNames = [...new Set(days.flatMap(d => (d.models || []).map(m => m.model)))].sort();
+        const colors = new Map(modelNames.map((name, i) => [name,
+          i < MODEL_COLORS.length ? MODEL_COLORS[i] : "hsl(" + (i * 137.508 % 360) + " 65% 55%)"
+        ]));
+        const legend = $("weekModels");
+        legend.replaceChildren();
+        modelNames.forEach(name => {
+          const item = document.createElement("span");
+          item.className = "model-item";
+          const swatch = document.createElement("i");
+          swatch.style.background = colors.get(name);
+          item.append(swatch, document.createTextNode(name));
+          legend.appendChild(item);
+        });
+
         const max = Math.max(1, ...days.map(d => d.input_total + d.output_total));
         let sumIn = 0, sumOut = 0;
         days.forEach(d => {
+          const models = d.models || [];
           const total = d.input_total + d.output_total;
           sumIn += d.input_total;
           sumOut += d.output_total;
           const h = Math.round(total / max * 72);
-          const inH = total ? Math.round(d.input_total / max * 72) : 0;
-          const outH = Math.max(0, h - inH);
           const col = document.createElement("div");
           col.className = "day";
           col.title = d.date + "\n输入 " + d.input_total +
-            "（缓存读 " + d.cache_read + "，命中率 " + d.cache_hit_rate.toFixed(1) + "%）" +
-            "\n输出 " + d.output_total;
-          col.innerHTML =
-            '<div class="total">' + (total ? fmtTokens(total) : "") + "</div>" +
-            '<div class="stack" style="height:' + Math.max(2, h) + 'px">' +
-              '<div class="out" style="height:' + outH + 'px"></div>' +
-              '<div class="in" style="height:' + inH + 'px"></div>' +
-            "</div>" +
-            '<div class="date">' + d.date.slice(5) + "</div>";
+            "（缓存读 " + d.cache_read + "，命中率 " + (d.cache_hit_rate || 0).toFixed(1) + "%）" +
+            "\n输出 " + d.output_total + models.map(m =>
+              "\n" + m.model + "：合计 " + fmtTokens(m.total) +
+              "（输入 " + fmtTokens(m.input_total) + "，输出 " + fmtTokens(m.output_total) + "）"
+            ).join("");
+
+          const totalLabel = document.createElement("div");
+          totalLabel.className = "total";
+          totalLabel.textContent = total ? fmtTokens(total) : "";
+          const stack = document.createElement("div");
+          stack.className = "stack";
+          stack.style.height = Math.max(2, h) + "px";
+          let cumulative = 0, used = 0;
+          models.forEach((m, i) => {
+            cumulative += m.total;
+            const end = i === models.length - 1 ? h : Math.round(cumulative / max * 72);
+            const segment = document.createElement("div");
+            segment.style.height = Math.max(0, end - used) + "px";
+            segment.style.background = colors.get(m.model);
+            stack.appendChild(segment);
+            used = end;
+          });
+          const date = document.createElement("div");
+          date.className = "date";
+          date.textContent = d.date.slice(5);
+          col.append(totalLabel, stack, date);
           chart.appendChild(col);
         });
         $("weekSummary").textContent = data && data.found

@@ -329,14 +329,14 @@ pub(crate) async fn daily_stats(
     }))
 }
 
-/// 最近 7 天（含今天）的本地日期与各自 00:00 的 epoch 毫秒，按日期升序。
+/// 最近 14 天（含今天）的本地日期与各自 00:00 的 epoch 毫秒，按日期升序。
 /// 逐日用 previous_day 推，避免跨夏令时时直接减固定 24h 造成边界漂移
-fn last_seven_days() -> Vec<(String, i64)> {
+fn last_fourteen_days() -> Vec<(String, i64)> {
     use time::{OffsetDateTime, UtcOffset};
     let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let mut date = OffsetDateTime::now_utc().to_offset(offset).date();
     let mut days = Vec::new();
-    for _ in 0..7 {
+    for _ in 0..14 {
         days.push((
             date.to_string(),
             date.midnight().assume_offset(offset).unix_timestamp() * 1000,
@@ -364,9 +364,11 @@ fn bucket_index(days: &[(String, i64)], t: i64) -> Option<usize> {
     None
 }
 
-/// 全量读取一个 wire.jsonl，把窗口内的 usage.record 聚合到对应日期；
+type ModelAggs = std::collections::BTreeMap<String, DailyAgg>;
+
+/// 全量读取一个 wire.jsonl，把窗口内的 usage.record 按日期与模型聚合；
 /// 返回是否命中过记录（文件名再新也不保证窗口内真有事件）
-fn consume_wire_week(days: &[(String, i64)], aggs: &mut [DailyAgg], path: &Path) -> bool {
+fn consume_wire_week(days: &[(String, i64)], aggs: &mut [ModelAggs], path: &Path) -> bool {
     use std::io::Read;
     let mut buf = Vec::new();
     if std::fs::File::open(path)
@@ -391,7 +393,12 @@ fn consume_wire_week(days: &[(String, i64)], aggs: &mut [DailyAgg], path: &Path)
         };
         let Some(u) = v.get("usage") else { continue };
         let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-        let agg = &mut aggs[i];
+        let model = v
+            .get("model")
+            .and_then(|m| m.as_str())
+            .filter(|m| !m.is_empty())
+            .unwrap_or("未知模型");
+        let agg = aggs[i].entry(model.to_string()).or_default();
         agg.input_other += get("inputOther");
         agg.output += get("output");
         agg.cache_read += get("inputCacheRead");
@@ -401,7 +408,7 @@ fn consume_wire_week(days: &[(String, i64)], aggs: &mut [DailyAgg], path: &Path)
     found
 }
 
-/// 近 7 天各日用量（全部会话，含子 agent）：设置页进入/手动刷新时调用。
+/// 近 14 天各日用量（全部会话，含子 agent，按模型细分）：设置页进入/手动刷新时调用。
 /// 与 daily_stats 的常驻增量游标不同，这里按需全量解析，但只读窗口内
 /// 活跃文件（append-only，mtime 早于窗口起点的文件不可能含窗口内事件）。
 /// async：目录遍历与文件读取可能阻塞，不能跑在主线程
@@ -409,9 +416,9 @@ fn consume_wire_week(days: &[(String, i64)], aggs: &mut [DailyAgg], path: &Path)
 pub(crate) async fn weekly_stats(
     _state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, ()> {
-    let days = last_seven_days();
-    let week_start = days.first().map(|d| d.1).unwrap_or(0);
-    let mut aggs: Vec<DailyAgg> = (0..days.len()).map(|_| DailyAgg::default()).collect();
+    let days = last_fourteen_days();
+    let window_start = days.first().map(|d| d.1).unwrap_or(0);
+    let mut aggs: Vec<ModelAggs> = (0..days.len()).map(|_| ModelAggs::new()).collect();
     let mut found = false;
     if let Some(home) = kimi_code_home() {
         if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
@@ -435,7 +442,7 @@ pub(crate) async fn weekly_stats(
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_millis() as i64)
                             .unwrap_or(0);
-                        if mtime_ms < week_start {
+                        if mtime_ms < window_start {
                             continue;
                         }
                         if consume_wire_week(&days, &mut aggs, &wire) {
@@ -449,19 +456,44 @@ pub(crate) async fn weekly_stats(
     let days_json: Vec<serde_json::Value> = days
         .iter()
         .zip(aggs.iter())
-        .map(|((date, _), agg)| {
-            let input_total = agg.input_other + agg.cache_read + agg.cache_creation;
+        .map(|((date, _), models)| {
+            let mut input_total = 0;
+            let mut output_total = 0;
+            let mut cache_read = 0;
+            let models_json: Vec<serde_json::Value> = models
+                .iter()
+                .map(|(model, agg)| {
+                    let model_input = agg.input_other + agg.cache_read + agg.cache_creation;
+                    let hit_rate = if model_input > 0 {
+                        agg.cache_read as f64 * 100.0 / model_input as f64
+                    } else {
+                        0.0
+                    };
+                    input_total += model_input;
+                    output_total += agg.output;
+                    cache_read += agg.cache_read;
+                    serde_json::json!({
+                        "model": model,
+                        "input_total": model_input,
+                        "output_total": agg.output,
+                        "total": model_input + agg.output,
+                        "cache_read": agg.cache_read,
+                        "cache_hit_rate": hit_rate,
+                    })
+                })
+                .collect();
             let hit_rate = if input_total > 0 {
-                agg.cache_read as f64 * 100.0 / input_total as f64
+                cache_read as f64 * 100.0 / input_total as f64
             } else {
                 0.0
             };
             serde_json::json!({
                 "date": date,
                 "input_total": input_total,
-                "output_total": agg.output,
-                "cache_read": agg.cache_read,
+                "output_total": output_total,
+                "cache_read": cache_read,
                 "cache_hit_rate": hit_rate,
+                "models": models_json,
             })
         })
         .collect();
@@ -670,13 +702,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn week_has_seven_ascending_days() {
-        let days = last_seven_days();
-        assert_eq!(days.len(), 7);
+    fn week_has_fourteen_ascending_days() {
+        let days = last_fourteen_days();
+        assert_eq!(days.len(), 14);
         for w in days.windows(2) {
             assert!(w[0].1 < w[1].1);
             assert_ne!(w[0].0, w[1].0);
         }
+    }
+
+    #[test]
+    fn weekly_usage_is_aggregated_by_model() {
+        let path = std::env::temp_dir().join(format!(
+            "tauri-kimi-weekly-{}-{}.jsonl",
+            std::process::id(),
+            epoch_ms()
+        ));
+        let records = concat!(
+            r#"{"type":"usage.record","model":"model-a","time":100,"usage":{"inputOther":100,"output":10,"inputCacheRead":20,"inputCacheCreation":30}}"#,
+            "\n",
+            r#"{"type":"usage.record","model":"model-b","time":200,"usage":{"inputOther":200,"output":20,"inputCacheRead":40,"inputCacheCreation":60}}"#,
+            "\n",
+            r#"{"type":"usage.record","model":"model-a","time":300,"usage":{"inputOther":7,"output":3,"inputCacheRead":0,"inputCacheCreation":0}}"#,
+            "\n"
+        );
+        std::fs::write(&path, records).unwrap();
+        let days = vec![("d0".to_string(), 0), ("d1".to_string(), 1000)];
+        let mut aggs = vec![ModelAggs::new(), ModelAggs::new()];
+        assert!(consume_wire_week(&days, &mut aggs, &path));
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(aggs[0].len(), 2);
+        let a = &aggs[0]["model-a"];
+        assert_eq!(a.input_other, 107);
+        assert_eq!(a.output, 13);
+        assert_eq!(a.cache_read, 20);
+        assert_eq!(a.cache_creation, 30);
+        let b = &aggs[0]["model-b"];
+        assert_eq!(b.input_other, 200);
+        assert_eq!(b.output, 20);
+        assert_eq!(b.cache_read, 40);
+        assert_eq!(b.cache_creation, 60);
+        assert!(aggs[1].is_empty());
     }
 
     #[test]

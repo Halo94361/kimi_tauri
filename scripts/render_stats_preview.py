@@ -8,6 +8,7 @@ headless chromium 截图。产物写在 ui/.preview/（已 gitignore）。
 用法：
     python3 scripts/render_stats_preview.py
     python3 scripts/render_stats_preview.py --out /path/to/dir
+    python3 scripts/render_stats_preview.py --scale 1   # 模拟 100% 缩放屏
 """
 
 from __future__ import annotations
@@ -26,7 +27,8 @@ DEFAULT_OUT = ROOT / "ui" / ".preview"
 WIDTH = 300
 # 明细全展开约 440px，留足余量；多余背景最后按内容裁掉
 HEIGHT = 760
-SCALE = 2
+# 默认按 200% 渲染看清细节；--scale 1 用于核对 100% 缩放屏上的实际观感
+DEFAULT_SCALE = 2
 
 
 def find_chromium() -> str:
@@ -152,7 +154,7 @@ def inject(html: str, theme: str) -> str:
     return html
 
 
-def crop_to_content(path: Path) -> None:
+def crop_to_content(path: Path, scale: int) -> None:
     try:
         from PIL import Image, ImageChops
     except ImportError:
@@ -163,11 +165,11 @@ def crop_to_content(path: Path) -> None:
     box = diff.getbbox()
     if not box:
         return
-    bottom = min(im.height, box[3] + 12 * SCALE)
+    bottom = min(im.height, box[3] + 12 * scale)
     im.crop((0, 0, im.width, bottom)).save(path)
 
 
-def render(chrome: str, theme: str, out_dir: Path, cache_dir: Path) -> Path:
+def render(chrome: str, theme: str, out_dir: Path, cache_dir: Path, scale: int) -> Path:
     html_path = out_dir / f"stats-{theme}.html"
     png_path = out_dir / f"stats-{theme}.png"
     html_path.write_text(inject(STATS.read_text(encoding="utf-8"), theme), encoding="utf-8")
@@ -177,7 +179,7 @@ def render(chrome: str, theme: str, out_dir: Path, cache_dir: Path) -> Path:
         "--no-sandbox",
         "--disable-dev-shm-usage",
         "--hide-scrollbars",
-        "--force-device-scale-factor=%d" % SCALE,
+        "--force-device-scale-factor=%d" % scale,
         "--window-size=%d,%d" % (WIDTH, HEIGHT),
         "--virtual-time-budget=4000",
         "--user-data-dir=%s" % cache_dir,
@@ -189,7 +191,7 @@ def render(chrome: str, theme: str, out_dir: Path, cache_dir: Path) -> Path:
         sys.stderr.write(proc.stdout)
         sys.stderr.write(proc.stderr)
         sys.exit("chromium 截图失败：" + theme)
-    crop_to_content(png_path)
+    crop_to_content(png_path, scale)
     return png_path
 
 
@@ -197,13 +199,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--chrome", default=None)
+    parser.add_argument("--scale", type=int, default=DEFAULT_SCALE, help="设备像素比，1 模拟 100%% 缩放屏")
     args = parser.parse_args()
     chrome = args.chrome or find_chromium()
     out_dir = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = Path.home() / ".cache" / "kimi-stats-preview"
     for theme in ("dark", "light"):
-        path = render(chrome, theme, out_dir, cache_dir)
+        path = render(chrome, theme, out_dir, cache_dir, args.scale)
         print(path)
 
 

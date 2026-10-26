@@ -14,6 +14,15 @@
       font-style: normal;
       font-display: block;
     }
+    /* 浮窗整页走 SemiBold：100% 缩放下 Regular 的中文竖笔只有 0.77 设备像素，
+       抗锯齿后是一根灰线；同字号 SemiBold 是 0.97px，正好压住一个整像素 */
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI-Semibold.woff2") format("woff2");
+      font-weight: 600;
+      font-style: normal;
+      font-display: block;
+    }
     /* 独立子 WebView：宽度固定，高度随内容变化由 Rust 调整；
        页面底色取内容页采样色，保证圆角外沿与背后页面一致。
        内部一律用半透明填充，落在任何采样底色上都自然 */
@@ -64,7 +73,8 @@
       overflow: hidden;
       background: var(--page-bg);
       color: var(--text);
-      font: 12px/1.5 var(--sans);
+      /* 600：本页 @font-face 注册了 SemiBold 字面，整页统一走它 */
+      font: 600 13px/1.5 var(--sans);
       user-select: none;
       -webkit-user-select: none;
     }
@@ -95,7 +105,7 @@
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-2);
     }
     #barText .num { color: var(--text); }
@@ -145,14 +155,14 @@
       margin-bottom: 8px;
     }
     .detail-head > span:first-child {
-      font-size: 10px;
+      font-size: 11px;
       letter-spacing: 0.06em;
       color: var(--text-3);
     }
     #pin {
       cursor: pointer;
       opacity: 0.35;
-      font-size: 11px;
+      font-size: 12px;
       transition: opacity 120ms ease;
     }
     #pin:hover { opacity: 1; }
@@ -163,7 +173,7 @@
       justify-content: space-between;
       gap: 8px;
       margin: 10px 0 5px;
-      font-size: 10px;
+      font-size: 11px;
       letter-spacing: 0.04em;
       color: var(--text-3);
       white-space: nowrap;
@@ -172,7 +182,7 @@
     .section .note {
       margin-left: auto;
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
       color: var(--text-3);
       font-variant-numeric: tabular-nums;
     }
@@ -190,7 +200,7 @@
       margin-bottom: 6px;
     }
     .plan-name {
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--text);
       letter-spacing: 0.01em;
@@ -198,7 +208,7 @@
     .plan-sub {
       margin-left: auto;
       font-family: var(--mono);
-      font-size: 9px;
+      font-size: 10px;
       color: var(--text-3);
       white-space: nowrap;
     }
@@ -224,13 +234,13 @@
       min-width: 0;
     }
     .quota-label {
-      font-size: 10px;
+      font-size: 11px;
       color: var(--text-2);
       white-space: nowrap;
     }
     .quota-reset {
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
       color: var(--text-3);
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
@@ -238,8 +248,8 @@
     .quota-pct {
       margin-left: auto;
       font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 500;
+      font-size: 12px;
+      font-weight: 600;
       color: var(--text-2);
       font-variant-numeric: tabular-nums;
       white-space: nowrap;
@@ -287,13 +297,13 @@
       border: 1px dashed var(--border);
       border-radius: 7px;
       color: var(--text-3);
-      font-size: 10px;
+      font-size: 11px;
       line-height: 1.4;
     }
     .empty {
       padding: 6px 0;
       color: var(--text-3);
-      font-size: 10px;
+      font-size: 11px;
     }
 
     .chart {
@@ -340,7 +350,7 @@
     }
     .cell .k {
       flex-shrink: 0;
-      font-size: 10px;
+      font-size: 11px;
       color: var(--text-3);
       white-space: nowrap;
     }
@@ -349,7 +359,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       font-family: var(--mono);
-      font-size: 11px;
+      font-size: 12px;
       color: var(--text-2);
       font-variant-numeric: tabular-nums;
       white-space: nowrap;

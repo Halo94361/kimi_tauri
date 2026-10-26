@@ -41,6 +41,8 @@ cargo tauri dev                               # 开发模式
 cargo build --release                         # 产物 target/release/tauri_kimi.exe
 ```
 
+版本发布时必须同步更新 `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 `src-tauri/tauri.conf.json` 三处版本号，并核对它们完全一致。Windows exe 的版本资源取自 `tauri.conf.json`，不能只改 Cargo 清单；提交发布标签前检查三处版本与标签一致。
+
 统计浮窗改版后先用 `python3 scripts/render_stats_preview.py` 做视觉回测：脚本把 `ui/stats.html` 注入样例数据，经 headless chromium 渲染出 `ui/.preview/stats-{dark,light}.png`（产物已 gitignore）。它不依赖 Tauri 运行时，改 CSS/图表后可直接重跑。`--scale` 控制设备像素比，默认 2；`--scale 1` 用来核对 100% 缩放屏上的真实观感（默认的 2 倍预览会掩盖低分屏上的细笔画问题）。
 
 产物 exe 动态依赖 `WebView2Loader.dll`（webview2-com 构建脚本自动复制到 `target/release/`，无静态链接开关），分发时 zip 打包 exe + dll 同目录，CI 工作流已如此处理。

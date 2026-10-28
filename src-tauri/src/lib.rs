@@ -31,7 +31,8 @@ use crate::state::AppState;
 use crate::stats_win::{STATS_BAR_HEIGHT, STATS_WIDTH};
 use crate::window::{
     broadcast_theme, effective_theme, ensure_remote_webview, is_local, layout_webviews,
-    notification_permission, open_external, show_main_window, theme_background, TABBAR_HEIGHT,
+    notification_permission, open_external, show_main_window, theme_background, BROWSER_ARGS,
+    TABBAR_HEIGHT,
 };
 
 /// 活动内容页主题采样周期；每次 eval 同步读取并上报，结果变化时立即广播
@@ -162,6 +163,7 @@ pub fn run() {
 
             let tabbar = win.add_child(
                 WebviewBuilder::new("tabbar", WebviewUrl::App("tabs.html".into()))
+                    .additional_browser_args(BROWSER_ARGS)
                     .background_color(initial_bg)
                     .initialization_script(shell_theme_init_js(initial_dark)),
                 LogicalPosition::new(0.0, 0.0),
@@ -172,6 +174,7 @@ pub fn run() {
             let perm_app = app.handle().clone();
             win.add_child(
                 WebviewBuilder::new("local", WebviewUrl::App("index.html".into()))
+                    .additional_browser_args(BROWSER_ARGS)
                     .background_color(initial_bg)
                     // 关闭 Tauri 自带拖放拦截，让 web UI 的 HTML5 原生 drop 事件生效
                     .disable_drag_drop_handler()
@@ -214,6 +217,7 @@ pub fn run() {
             // 设置页：第三个内容 WebView，纯原生自绘；初始隐藏，切到「设置」时显示
             win.add_child(
                 WebviewBuilder::new("settings", WebviewUrl::App("settings.html".into()))
+                    .additional_browser_args(BROWSER_ARGS)
                     .background_color(initial_bg)
                     .initialization_script(shell_theme_init_js(initial_dark)),
                 content_pos,
@@ -227,6 +231,7 @@ pub fn run() {
             let stats_pos = LogicalPosition::new(win_w - STATS_WIDTH - 12.0, TABBAR_HEIGHT + 12.0);
             let stats = win.add_child(
                 WebviewBuilder::new("stats", WebviewUrl::App("stats.html".into()))
+                    .additional_browser_args(BROWSER_ARGS)
                     .background_color(initial_bg)
                     .initialization_script(shell_theme_init_js(initial_dark))
                     // 不在创建时抢焦点，键盘输入应留在内容页

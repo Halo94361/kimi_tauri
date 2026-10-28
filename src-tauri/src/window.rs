@@ -13,6 +13,15 @@ use crate::stats_win::{apply_stats_geom, apply_stats_visibility, clamp_stats_geo
 /// 远端托管版 kimi web：登录态由 WebView2 用户数据目录持久化
 const REMOTE_URL: &str = "https://code-rc.kimi.com/";
 
+/// WebView2 额外启动参数：关掉 Chromium 的横向 overscroll 前进/后退。
+/// 触摸板双指横滑到页面边缘就会触发它，WebView2 的 IsSwipeNavigationEnabled
+/// 管不到（该开关 wry 已默认关闭），只能在浏览器参数里禁用对应特性。
+/// 传了这份参数就整体替换 wry 的默认值，因此 mini menu / PDF 工具栏 /
+/// SmartScreen 的默认关闭要自己补回来。所有 WebView 必须用同一份参数：
+/// WebView2 环境按用户数据目录共享，谁先创建谁生效。
+pub(crate) const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,OverscrollHistoryNavigation";
+
 /// 顶部选项卡栏（tabbar WebView）的逻辑高度
 pub(crate) const TABBAR_HEIGHT: f64 = 36.0;
 
@@ -267,6 +276,7 @@ pub(crate) fn ensure_remote_webview(app: &AppHandle) -> tauri::Result<()> {
     let dark = effective_theme(app).0;
     let wv = win.add_child(
         WebviewBuilder::new("remote", WebviewUrl::External(Url::parse(REMOTE_URL).unwrap()))
+            .additional_browser_args(BROWSER_ARGS)
             .background_color(theme_background(dark))
             .disable_drag_drop_handler()
             .initialization_script(crate::inject::REFRESH_BRIDGE_JS)

@@ -66,7 +66,7 @@ pub(crate) fn show_main_window(app: &AppHandle) {
 }
 
 /// 切换活动选项卡：只改内容 WebView 可见性，本地与远端会话同时存活互不打扰；
-/// 设置页打开时统计浮窗隐藏，避免置顶遮挡
+/// 设置页打开时统计浮窗隐藏，避免置顶遮挡；焦点交给内容页，让快捷键作用于实际页面
 pub(crate) fn switch_to_tab(app: &AppHandle, tab: &str) {
     *app.state::<AppState>().active_tab.lock().unwrap() = tab.to_string();
     for label in ["local", "remote", "settings"] {
@@ -85,12 +85,13 @@ pub(crate) fn switch_to_tab(app: &AppHandle, tab: &str) {
         }
     }
     apply_stats_visibility(app);
+    focus_active_content(app);
     // 同步选项卡栏高亮（覆盖 show_error 等 Rust 侧强制切卡的场景）
     let _ = app.emit_to("tabbar", "tab-changed", tab);
 }
 
 /// 把键盘焦点还给当前选项卡的内容 WebView：
-/// 点击/拖动统计浮窗会夺走焦点，不回焦会导致聊天输入框无法直接输入
+/// 切卡以及点击/拖动统计浮窗后，避免输入与快捷键仍落在其他 WebView
 pub(crate) fn focus_active_content(app: &AppHandle) {
     let tab = app.state::<AppState>().active_tab.lock().unwrap().clone();
     let label = match tab.as_str() {
@@ -100,6 +101,13 @@ pub(crate) fn focus_active_content(app: &AppHandle) {
     if let Some(wv) = app.get_webview(label) {
         let _ = wv.set_focus();
     }
+}
+
+/// 选项卡栏完成事件监听注册后调用，补发真实活动选项卡，覆盖页面重载后的默认高亮
+#[tauri::command]
+pub(crate) fn sync_tab(app: AppHandle) {
+    let tab = app.state::<AppState>().active_tab.lock().unwrap().clone();
+    let _ = app.emit_to("tabbar", "tab-changed", tab);
 }
 
 /// 主窗口客户区的逻辑尺寸

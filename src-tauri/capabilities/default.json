@@ -13,6 +13,7 @@
     "allow-proxy-status",
     "allow-retry-proxy",
     "allow-switch-tab",
+    "allow-sync-tab",
     "allow-report-theme",
     "allow-sync-theme",
     "allow-session-stats",

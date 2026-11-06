@@ -57,6 +57,7 @@ pub fn run() {
             usage::hourly_stats,
             quota::quota_stats,
             window::switch_tab,
+            window::sync_tab,
             window::report_theme,
             window::sync_theme,
             usage::report_session,

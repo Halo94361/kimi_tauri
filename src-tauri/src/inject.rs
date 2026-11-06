@@ -45,8 +45,8 @@ pub(crate) fn shell_theme_init_js(dark: bool) -> String {
         .replace("__THEME__", if dark { "dark" } else { "light" })
 }
 
-/// 注入本地与远端内容 WebView 的共享脚本，补齐两块 WebView2 缺失行为：
-/// 1. F5 / Ctrl+R 触发页面重载（WebView2 默认不响应浏览器式刷新快捷键），
+/// 注入本地与远端内容 WebView 的共享脚本，提供刷新快捷键与桌面桥：
+/// 1. F5 / Ctrl+R 触发当前内容页重载（不依赖 WebView2 的加速器默认配置），
 ///    用于长时间会话后释放渲染进程内存
 /// 2. 暴露 kimi web 约定的桌面桥 window.kimiDesktop：showWindow 供通知
 ///    toast 点击唤回主窗口；其余字段是宿主契约所需的最小空实现

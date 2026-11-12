@@ -25,8 +25,9 @@ Kimi Code CLI（kimi web）
 opencode-session-proxy（127.0.0.1:58787）
   │  1. 读取 body（默认上限 64 MiB，可配置）
   │  2. 解析 prompt_cache_key / metadata.user_id
-  │  3. 覆盖 x-opencode-session
-  │  4. 重写 URL 为 upstream + 原 path
+  │  3. 查 fork-map.json，保活 fork 换成父会话 ID
+  │  4. 覆盖 x-opencode-session
+  │  5. 重写 URL 为 upstream + 原 path
   ▼
 https://opencode.ai/inference/go/...
   │  SSE 流式响应
@@ -42,22 +43,26 @@ https://opencode.ai/inference/go/...
    - 已知 `Content-Length` 超限：不缓冲，原样流式转发，注入进程级 fallback ID
    - chunked 且超限：已读前缀与剩余流拼接后转发，不截断，同样注入 fallback ID
 3. 反序列化 JSON，按优先级取会话 ID。
-4. 清洗 ID：只保留可打印 ASCII，去引号与反斜杠，截断到 191 字符。
-5. 删除客户端自带的 `x-opencode-session`（大小写两种），写入新值。
-6. 拼接上游 URL：`upstream.path + 请求 path`，保留 query；Host 设为上游域名。
-7. 带上原始 `Authorization` 转发；补 `X-Forwarded-For` 等标准头。
-8. 响应按块透传（`FlushInterval = -1`），SSE 不缓冲。
-9. 上游不可达时返回 `502` 与一行纯文本。
+4. 查 cache-keeper 的 fork 映射：命中则换成父会话 ID（保活 fork 用它复用父会话缓存）。
+5. 清洗 ID：只保留可打印 ASCII，去引号与反斜杠，截断到 191 字符。
+6. 删除客户端自带的 `x-opencode-session`（大小写两种），写入新值。
+7. 拼接上游 URL：`upstream.path + 请求 path`，保留 query；Host 设为上游域名。
+8. 带上原始 `Authorization` 转发；补 `X-Forwarded-For` 等标准头。
+9. 响应按块透传（`FlushInterval = -1`），SSE 不缓冲。
+10. 上游不可达时返回 `502` 与一行纯文本。
 
 ## 会话 ID 取值规则
 
 | 优先级 | 来源 | 说明 |
 |---:|---|---|
-| 1 | 请求体 `prompt_cache_key` | OpenAI 协议；Kimi Code 用会话 ID 填充，恢复会话不变 |
-| 2 | 请求体 `metadata.user_id` | Anthropic 协议；Kimi Code 同样会发 |
-| 3 | `ses_proxy_<8位hex>` | 进程启动时生成；仅当请求体没有任何会话标识时使用 |
+| 1 | `fork-map.json` 映射 | cache-keeper 保活 fork → 父会话；让临时 fork 复用父会话的缓存亲和 |
+| 2 | 请求体 `prompt_cache_key` | OpenAI 协议；Kimi Code 用会话 ID 填充，恢复会话不变 |
+| 3 | 请求体 `metadata.user_id` | Anthropic 协议；Kimi Code 同样会发 |
+| 4 | `ses_proxy_<8位hex>` | 进程启动时生成；仅当请求体没有任何会话标识时使用 |
 
 Kimi Code 的 `prompt_cache_key` 与它打印的 `session_<uuid>` 完全一致，因此恢复会话时缓存亲和性连续。
+
+保活 fork 的 `prompt_cache_key` 是 fork 自己的新会话 ID，直接注入会让 OpenCode 把它当作新会话、缓存全未命中。cache-keeper 在 `session/fork` 成功后把 `forkSessionId → parentSessionId` 写入 `<KIMI_CODE_HOME>/cache-keeper/fork-map.json`，删除 fork 后再移除；代理按该表把 `x-opencode-session` 换成父会话 ID。文件缺失、损坏或版本不符时退回上表其余规则。
 
 ## 路由规则
 
@@ -112,8 +117,9 @@ journalctl --user -u opencode-session-proxy -f
 | `-upstream` / `OCSP_UPSTREAM` | `https://opencode.ai/inference/go` | 上游前缀 |
 | `-debug` / `OCSP_DEBUG=1` | 关闭 | 每次请求打印注入的 session id 与来源 |
 | `-max-body` / `OCSP_MAX_BODY` | `64`（MiB） | 缓冲解析上限；超限时改为流式转发并注入 fallback ID |
+| `-fork-map` / `OCSP_FORK_MAP` | `<KIMI_CODE_HOME>/cache-keeper/fork-map.json` | cache-keeper 保活 fork → 父会话映射；文件缺失时按空表处理 |
 
-debug 日志只含路径、session id 和来源，不含请求体、Authorization 或 key。
+debug 日志只含路径、session id 和来源，不含请求体、Authorization 或 key。来源为 `fork-map` 时表示命中了保活映射。
 
 ## 验证与排障
 
@@ -153,6 +159,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 - **多实例**：第二个壳实例会复用第一个拉起的代理；先退出的实例会随 Job Object 带走代理，第二个实例的请求随之失败。
 - **端口判定依赖健康端点**：只有 `/__ocsp_health` 返回代理标识才算就绪；其他程序占用 58787 会被判为“端口被占用”并提示，而不是误复用。
 - **超限请求丢失每会话 ID**：超过 `-max-body`（默认 64 MiB）的请求仍会完整转发，但只能注入进程级 fallback ID，多个大会话会共用同一路由标识；需要时调大该值，代价是内存占用。纯文本请求（1M 上下文约 4 MB）远低于默认上限，图片密集的会话才可能触及。
+- **fork 映射依赖插件写入**：未安装 cache-keeper 或映射文件不可读时，保活 fork 仍按自身 ID 注入，OpenCode 侧无法复用父会话缓存；控制器异常退出留下的映射会一直保留到下次启动清空，但对应的 fork ID 不会再出现，不影响其他请求。
 - **不处理鉴权**：`Authorization` 原样透传，代理不持有 key。
 - **仅本机**：绑定 `127.0.0.1`，不要改成 `0.0.0.0` 暴露到局域网。
 

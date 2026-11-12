@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -35,6 +36,7 @@ func main() {
 	upstreamRaw := flag.String("upstream", env("OCSP_UPSTREAM", "https://opencode.ai/inference/go"), "upstream base URL")
 	debug := flag.Bool("debug", env("OCSP_DEBUG", "") == "1", "log injected session ids")
 	maxBodyMiB := flag.Int64("max-body", envInt("OCSP_MAX_BODY", 64), "max buffered request body in MiB")
+	forkMapPath := flag.String("fork-map", env("OCSP_FORK_MAP", defaultForkMapPath()), "cache-keeper fork to parent session map")
 	flag.Parse()
 
 	maxBody := *maxBodyMiB << 20
@@ -51,7 +53,7 @@ func main() {
 
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
-			inject(pr, fallback, maxBody, *debug)
+			inject(pr, fallback, maxBody, *forkMapPath, *debug)
 			pr.Out.URL.Scheme = upstream.Scheme
 			pr.Out.URL.Host = upstream.Host
 			pr.Out.URL.Path = joinPath(upstream.Path, pr.In.URL.Path)
@@ -111,7 +113,7 @@ func main() {
 	}
 }
 
-func inject(pr *httputil.ProxyRequest, fallback string, maxBody int64, debug bool) {
+func inject(pr *httputil.ProxyRequest, fallback string, maxBody int64, forkMapPath string, debug bool) {
 	if pr.In.Body == nil || pr.In.Body == http.NoBody {
 		return
 	}
@@ -157,6 +159,10 @@ func inject(pr *httputil.ProxyRequest, fallback string, maxBody int64, debug boo
 	if id == "" {
 		id, source = fallback, "fallback"
 	}
+	// 保活 fork 在 OpenCode 侧是全新会话；换成父会话才能复用缓存前缀
+	if parent := sanitize(forkParent(forkMapPath, id)); parent != "" {
+		id, source = parent, "fork-map"
+	}
 	applySession(pr, id, source, debug)
 }
 
@@ -167,6 +173,42 @@ func applySession(pr *httputil.ProxyRequest, id, source string, debug bool) {
 	if debug {
 		log.Printf("inject path=%s session=%s source=%s", pr.In.URL.Path, id, source)
 	}
+}
+
+type forkMapFile struct {
+	Version int               `json:"version"`
+	Forks   map[string]string `json:"forks"`
+}
+
+// forkParent 从 cache-keeper 的临时映射中查 fork 对应的父会话 id。
+// 文件缺失、损坏或版本不符时返回空串，不影响正常注入。
+func forkParent(path, forkID string) string {
+	if path == "" || forkID == "" {
+		return ""
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var m forkMapFile
+	if json.Unmarshal(body, &m) != nil || m.Version != 1 {
+		return ""
+	}
+	parent := m.Forks[forkID]
+	if parent == "" || parent == forkID {
+		return ""
+	}
+	return parent
+}
+
+func defaultForkMapPath() string {
+	if home := os.Getenv("KIMI_CODE_HOME"); home != "" {
+		return filepath.Join(home, "cache-keeper", "fork-map.json")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".kimi-code", "cache-keeper", "fork-map.json")
+	}
+	return ""
 }
 
 func sanitize(s string) string {

@@ -175,6 +175,10 @@ fn spawn_proxy() -> Option<Child> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // 保活 fork 的父会话映射随 KIMI_CODE_HOME 变化，显式传给代理
+        if let Some(home) = crate::usage::kimi_code_home() {
+            cmd.env("OCSP_FORK_MAP", home.join("cache-keeper").join("fork-map.json"));
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

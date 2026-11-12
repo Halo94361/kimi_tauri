@@ -410,11 +410,24 @@
         return times[0] || null;
       }
 
+      function isProbing(session) {
+        return session.state === "probing";
+      }
+
+      function isActive(session) {
+        return !!session.busy || isProbing(session);
+      }
+
       function renderCountdowns() {
         const sessions = activeSessions();
         const next = nearestProbe(sessions);
-        barCountdown.textContent = sessions.some(function (session) { return session.busy; })
-          ? "保活中" : next ? fmtDuration(next) : "--:--";
+        const busy = sessions.some(function (session) { return !!session.busy; });
+        const probing = sessions.some(isProbing);
+        const failed = sessions.some(function (session) { return !!session.error; });
+        barCountdown.textContent = busy ? "对话进行中"
+          : probing ? "正在保活"
+            : failed ? "保活暂停"
+              : next ? fmtDuration(next) : "--:--";
         detail.querySelectorAll("[data-next]").forEach(function (element) {
           element.textContent = element.dataset.next ? fmtDuration(element.dataset.next) : "等待中";
         });
@@ -422,11 +435,12 @@
 
       function sessionCard(session) {
         const busy = !!session.busy;
+        const probing = isProbing(session);
         const failed = !!session.error;
         const stateClass = failed ? "error" : busy ? "busy" : "";
-        const stateText = failed ? "已暂停" : busy ? "正在保活" : "等待保活";
+        const stateText = failed ? "已暂停" : busy ? "对话进行中" : probing ? "正在保活" : "等待保活";
         const isCurrent = lastData.currentSessionId && lastData.currentSessionId === session.sessionId;
-        const countdown = busy
+        const countdown = isActive(session)
           ? '<span class="session-countdown num">进行中</span>'
           : '<span class="session-countdown num" data-next="' + esc(session.nextProbeAt || "") + '">--:--</span>';
         return '<article class="session">' +
@@ -455,7 +469,8 @@
         const sessions = activeSessions();
         const hasError = sessions.some(function (session) { return !!session.error; });
         const busy = sessions.some(function (session) { return !!session.busy; });
-        stateDot.className = sessions.length ? (hasError ? "error" : busy ? "busy" : "active") : "";
+        const probing = sessions.some(isProbing);
+        stateDot.className = sessions.length ? (hasError ? "error" : busy || probing ? "busy" : "active") : "";
         barCount.textContent = sessions.length ? sessions.length + " 会话" : "已关闭";
         summary.textContent = sessions.length ? sessions.length + " 个会话运行中" : "当前未开启";
         sessionList.innerHTML = sessions.length

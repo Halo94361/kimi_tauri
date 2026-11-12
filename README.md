@@ -36,6 +36,7 @@ cd src-tauri && cargo build --release
 - 启动时执行 `kimi web --no-open --port <port>`，端口首选 58627，占用时自动回退（可在设置中指定固定端口与 kimi 路径，重启服务后生效）；本地界面就绪后由壳调用本地 `/api/v1/remote-control` 接口开启远程隧道（手机或另一台电脑可接管本机会话）。网络不佳时开启失败不阻塞本地界面，选项卡栏会显示提示与「重试」按钮；设置中可关闭启动自动开启（只影响下次启动），无订阅用户不会再看到失败提示。
 - 关闭窗口默认只隐藏到托盘（可在设置改为直接退出），需从托盘菜单“退出”才会结束 `kimi web` 子进程。
 - 使用 OpenCode Go 订阅时，把 `%USERPROFILE%\.kimi-code\config.toml` 里该 provider 的 `base_url` 设为 `http://127.0.0.1:58787/openai/v1`。Release 包已附带 `opencode-session-proxy.exe`（与主程序同目录；源码与工作原理见 [sidecar/opencode-session-proxy/README.md](sidecar/opencode-session-proxy/README.md)），壳默认仅在配置指向代理时才于启动 `kimi` 前拉起并随进程树回收（设置中可改为始终启动或关闭）；缺少该文件时自动跳过，不影响其他 provider。
+- cache-keeper 状态条依赖独立插件仓库 [Halo94361/kimi-code-cache-keeper](https://github.com/Halo94361/kimi-code-cache-keeper)。本仓库不包含插件源码，只桥接其本机控制器的 `status` / `off` / `stop` 接口；需先在 Kimi Code 中通过 `/plugins install` 安装插件并开启至少一个会话的保活，状态条才会出现。
 - 架构与开发细节见 [AGENTS.md](AGENTS.md)。
 
 ## 许可证

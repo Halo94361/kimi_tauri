@@ -153,6 +153,7 @@ pub(crate) fn layout_webviews(window: &tauri::Window) {
         g.clone()
     };
     apply_stats_geom(app, &g);
+    crate::cache_keeper::apply_cache_keeper_visibility(app);
     let _ = app.emit_to(
         "stats",
         "stats-geom",
@@ -229,7 +230,7 @@ pub(crate) fn broadcast_theme(app: &AppHandle) {
         let _ = win.set_theme(Some(if dark { Theme::Dark } else { Theme::Light }));
         let _ = win.set_background_color(Some(color));
     }
-    for label in ["tabbar", "local", "remote", "settings", "stats"] {
+    for label in ["tabbar", "local", "remote", "settings", "stats", "cache-keeper"] {
         if let Some(wv) = app.get_webview(label) {
             let _ = wv.set_background_color(Some(color));
         }
@@ -237,6 +238,11 @@ pub(crate) fn broadcast_theme(app: &AppHandle) {
     let _ = app.emit("theme-changed", if dark { "dark" } else { "light" });
     let _ = app.emit_to(
         "stats",
+        "page-theme",
+        serde_json::json!({ "dark": dark, "bg": bg }),
+    );
+    let _ = app.emit_to(
+        "cache-keeper",
         "page-theme",
         serde_json::json!({ "dark": dark, "bg": bg }),
     );

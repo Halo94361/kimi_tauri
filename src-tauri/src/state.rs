@@ -38,6 +38,8 @@ pub(crate) struct AppState {
     pub(crate) last_theme: Mutex<Option<(bool, Option<String>)>>,
     /// 统计浮窗的几何与状态（由 Rust 统一管理，页面只上报内容尺寸）
     pub(crate) stats_geom: Mutex<StatsGeom>,
+    /// 缓存保活顶栏的可见意愿与内容高度，水平位置跟随统计条布局
+    pub(crate) cache_keeper_geom: Mutex<CacheKeeperGeom>,
     /// 拖动循环占用标记，避免重复启动
     pub(crate) stats_dragging: Mutex<bool>,
     /// 内容页当前打开的会话 id（由 SESSION_REPORTER_JS 上报）
@@ -107,6 +109,21 @@ impl Default for StatsGeom {
             y: 0.0,
             w: STATS_WIDTH,
             h: STATS_BAR_HEIGHT,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CacheKeeperGeom {
+    pub(crate) visible: bool,
+    pub(crate) height: f64,
+}
+
+impl Default for CacheKeeperGeom {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            height: crate::window::TABBAR_HEIGHT,
         }
     }
 }

@@ -37,6 +37,7 @@ pub(crate) fn apply_stats_geom(app: &AppHandle, g: &StatsGeom) {
         let _ = wv.set_position(LogicalPosition::new(g.x, g.y));
         let _ = wv.set_size(LogicalSize::new(g.w, g.h));
     }
+    crate::cache_keeper::apply_cache_keeper_geom(app);
 }
 
 /// 只移动统计浮窗：拖动过程中尺寸不变，避免每帧重复触发 WebView 重排
@@ -195,6 +196,7 @@ pub(crate) fn apply_stats_visibility(app: &AppHandle) {
         apply_stats_geom(app, &g);
         emit_stats_theme(app);
     }
+    crate::cache_keeper::apply_cache_keeper_visibility(app);
 }
 
 /// 有数据才显示统计浮窗；隐藏时只记录意愿，不改几何

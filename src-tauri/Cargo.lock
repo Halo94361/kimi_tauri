@@ -3815,7 +3815,7 @@ dependencies = [
 
 [[package]]
 name = "tauri_kimi"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "regex",
  "reqwest 0.12.28",

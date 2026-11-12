@@ -345,6 +345,42 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the cache_keeper_focus_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cache-keeper-focus-content",
+          "markdownDescription": "Enables the cache_keeper_focus_content command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cache_keeper_off command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cache-keeper-off",
+          "markdownDescription": "Enables the cache_keeper_off command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cache_keeper_set_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cache-keeper-set-size",
+          "markdownDescription": "Enables the cache_keeper_set_size command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cache_keeper_set_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cache-keeper-set-visible",
+          "markdownDescription": "Enables the cache_keeper_set_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cache_keeper_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cache-keeper-status",
+          "markdownDescription": "Enables the cache_keeper_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cache_keeper_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cache-keeper-stop",
+          "markdownDescription": "Enables the cache_keeper_stop command without any pre-configured scope."
+        },
+        {
           "description": "Enables the daily_stats command without any pre-configured scope.",
           "type": "string",
           "const": "allow-daily-stats",
@@ -529,6 +565,42 @@
           "type": "string",
           "const": "allow-weekly-stats",
           "markdownDescription": "Enables the weekly_stats command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cache_keeper_focus_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cache-keeper-focus-content",
+          "markdownDescription": "Denies the cache_keeper_focus_content command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cache_keeper_off command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cache-keeper-off",
+          "markdownDescription": "Denies the cache_keeper_off command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cache_keeper_set_size command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cache-keeper-set-size",
+          "markdownDescription": "Denies the cache_keeper_set_size command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cache_keeper_set_visible command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cache-keeper-set-visible",
+          "markdownDescription": "Denies the cache_keeper_set_visible command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cache_keeper_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cache-keeper-status",
+          "markdownDescription": "Denies the cache_keeper_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cache_keeper_stop command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cache-keeper-stop",
+          "markdownDescription": "Denies the cache_keeper_stop command without any pre-configured scope."
         },
         {
           "description": "Denies the daily_stats command without any pre-configured scope.",

@@ -1,8 +1,9 @@
 //! tauri_kimi：把 kimi web 包装成双击即用的 Windows 桌面壳。
 //! 模块划分：state（全局状态）/ server（kimi 子进程）/ window（窗口、选项卡与主题）/
-//! stats_win（统计浮窗）/ usage（用量统计）/ inject（注入脚本）/
+//! stats_win（统计浮窗）/ cache_keeper（缓存保活桥接）/ usage（用量统计）/ inject（注入脚本）/
 //! settings（壳设置持久化）/ diagnostics（诊断与 CLI 升级）/ win_job（进程树回收）
 
+mod cache_keeper;
 mod diagnostics;
 mod inject;
 mod quota;
@@ -67,6 +68,12 @@ pub fn run() {
             stats_win::stats_focus_content,
             stats_win::stats_drag_start,
             stats_win::stats_reset_position,
+            cache_keeper::cache_keeper_status,
+            cache_keeper::cache_keeper_off,
+            cache_keeper::cache_keeper_stop,
+            cache_keeper::cache_keeper_set_visible,
+            cache_keeper::cache_keeper_set_size,
+            cache_keeper::cache_keeper_focus_content,
             remote::disconnect_remote,
             settings::get_settings,
             settings::set_settings,
@@ -142,9 +149,8 @@ pub fn run() {
                 _ => (1280.0, 800.0),
             };
 
-            // 裸窗口 + 5 个子 WebView：tabbar（顶部选项卡栏）、local（本地 kimi web）、
-            // remote（远端托管服务，可按设置不创建）、settings（设置页）、stats（用量统计浮窗）；
-            // 切换选项卡只改可见性，两个会话同时存活，stats 始终置顶（设置页打开时隐藏）
+            // 裸窗口 + 6 个子 WebView：tabbar、local、remote（可选）、settings、stats、cache-keeper；
+            // 切换选项卡只改内容页可见性，stats 与 cache-keeper 置顶（设置页打开时隐藏）
             let mut win_builder = WindowBuilder::new(app, "main")
                 .title("Kimi Code")
                 .inner_size(win_w, win_h)
@@ -247,6 +253,23 @@ pub fn run() {
                 g.x = win_w - STATS_WIDTH - 12.0;
                 g.y = TABBAR_HEIGHT + 12.0;
             }
+
+            // 缓存保活条最后创建以保持在最上层；插件状态就绪前隐藏，
+            // 统计条吸附后由 cache_keeper 模块把它放到统计条左侧
+            let keeper_pos = LogicalPosition::new(
+                (win_w - cache_keeper::CACHE_KEEPER_WIDTH - 8.0).max(0.0),
+                0.0,
+            );
+            let keeper = win.add_child(
+                WebviewBuilder::new("cache-keeper", WebviewUrl::App("cache-keeper.html".into()))
+                    .additional_browser_args(BROWSER_ARGS)
+                    .background_color(initial_bg)
+                    .initialization_script(shell_theme_init_js(initial_dark))
+                    .focused(false),
+                keeper_pos,
+                LogicalSize::new(cache_keeper::CACHE_KEEPER_WIDTH, TABBAR_HEIGHT),
+            )?;
+            let _ = keeper.hide();
 
             // 记录应用页面源（如 http://tauri.localhost/），供错误页/加载页导航使用
             if let Ok(mut u) = tabbar.url() {

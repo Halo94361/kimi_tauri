@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cache-keeper-off"
+description = "Enables the cache_keeper_off command without any pre-configured scope."
+commands.allow = ["cache_keeper_off"]
+
+[[permission]]
+identifier = "deny-cache-keeper-off"
+description = "Denies the cache_keeper_off command without any pre-configured scope."
+commands.deny = ["cache_keeper_off"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cache-keeper-stop"
+description = "Enables the cache_keeper_stop command without any pre-configured scope."
+commands.allow = ["cache_keeper_stop"]
+
+[[permission]]
+identifier = "deny-cache-keeper-stop"
+description = "Denies the cache_keeper_stop command without any pre-configured scope."
+commands.deny = ["cache_keeper_stop"]

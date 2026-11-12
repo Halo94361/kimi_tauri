@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kimi Code - 缓存保活</title>
+  <style>
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI.woff2") format("woff2");
+      font-weight: normal;
+      font-style: normal;
+      font-display: block;
+    }
+    @font-face {
+      font-family: "SarasaMonoSC";
+      src: url("fonts/SarasaMonoSC-UI-Semibold.woff2") format("woff2");
+      font-weight: 600;
+      font-style: normal;
+      font-display: block;
+    }
+    :root {
+      color-scheme: dark;
+      --page-bg: #1a1a1e;
+      --panel: rgba(30, 30, 34, 0.94);
+      --tabbar-bg: #1a1a1e;
+      --text: rgba(255, 255, 255, 0.88);
+      --text-2: rgba(255, 255, 255, 0.56);
+      --text-3: rgba(255, 255, 255, 0.38);
+      --fill-1: rgba(255, 255, 255, 0.05);
+      --fill-2: rgba(255, 255, 255, 0.09);
+      --fill-2-hover: rgba(255, 255, 255, 0.14);
+      --border: rgba(255, 255, 255, 0.12);
+      --divider: rgba(255, 255, 255, 0.08);
+      --accent: #1a88ff;
+      --green: #16c456;
+      --orange: #ff9f0a;
+      --danger: #ff4756;
+      --sans: "SarasaMonoSC", "Sarasa Mono SC", ui-monospace, "SF Mono", Menlo,
+        Consolas, monospace;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --page-bg: #ffffff;
+      --panel: rgba(255, 255, 255, 0.94);
+      --tabbar-bg: #ffffff;
+      --text: rgba(0, 0, 0, 0.86);
+      --text-2: rgba(0, 0, 0, 0.55);
+      --text-3: rgba(0, 0, 0, 0.38);
+      --fill-1: rgba(0, 0, 0, 0.035);
+      --fill-2: rgba(0, 0, 0, 0.06);
+      --fill-2-hover: rgba(0, 0, 0, 0.1);
+      --border: rgba(0, 0, 0, 0.12);
+      --divider: rgba(0, 0, 0, 0.07);
+      --accent: #1783ff;
+      --green: #0fae4a;
+      --orange: #f08a00;
+      --danger: #e5374a;
+    }
+    html, body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--page-bg);
+      color: var(--text);
+      font: 600 13px/1.5 var(--sans);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    button { font: inherit; }
+    button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .num {
+      font-variant-numeric: tabular-nums;
+    }
+    #root {
+      position: relative;
+      width: 300px;
+    }
+    #bar {
+      display: flex;
+      align-items: center;
+      width: 300px;
+      height: 36px;
+      box-sizing: border-box;
+      padding: 0 10px;
+      border: 0;
+      border-left: 1px solid var(--divider);
+      border-bottom: 1px solid var(--divider);
+      border-radius: 0;
+      background: var(--tabbar-bg);
+      color: var(--text-2);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    #bar:hover { background: var(--fill-1); }
+    #stateDot {
+      flex: none;
+      width: 6px;
+      height: 6px;
+      margin-right: 7px;
+      border-radius: 50%;
+      background: var(--text-3);
+    }
+    #stateDot.active {
+      background: var(--green);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 12%, transparent);
+    }
+    #stateDot.busy { background: var(--accent); }
+    #stateDot.error { background: var(--orange); }
+    #barLabel {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 12px;
+    }
+    #barCount {
+      margin-left: 5px;
+      color: var(--text);
+      font-size: 12px;
+    }
+    #barCountdown {
+      margin-left: auto;
+      padding-left: 10px;
+      color: var(--text);
+      font-size: 12px;
+    }
+    #detail {
+      display: none;
+      box-sizing: border-box;
+      width: 300px;
+      margin-top: 6px;
+      padding: 10px 12px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow-y: auto;
+    }
+    .detail-head {
+      display: flex;
+      align-items: center;
+      min-height: 24px;
+      margin-bottom: 8px;
+    }
+    .detail-title {
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: var(--text-3);
+    }
+    #summary {
+      margin-left: 7px;
+      font-size: 11px;
+      color: var(--text-2);
+    }
+    #pin {
+      margin-left: auto;
+      padding: 2px 0 2px 8px;
+      border: 0;
+      background: transparent;
+      color: var(--text-3);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    #pin:hover, #pin.active { color: var(--text); }
+    .session {
+      padding: 9px;
+      border-radius: 9px;
+      background: var(--fill-1);
+    }
+    .session + .session { margin-top: 6px; }
+    .session-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .session-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .badge {
+      flex: none;
+      padding: 0 5px;
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      color: var(--accent);
+      font-size: 10px;
+    }
+    .session-state {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-top: 7px;
+    }
+    .state-label {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--text-2);
+      font-size: 11px;
+    }
+    .state-label::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+    .state-label.busy::before { background: var(--accent); }
+    .state-label.error::before { background: var(--orange); }
+    .session-countdown {
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1.2;
+      letter-spacing: 0.02em;
+    }
+    .session-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 5px;
+      color: var(--text-3);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .session-error {
+      margin-top: 6px;
+      color: var(--orange);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+    .session-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+      padding-top: 7px;
+      border-top: 1px solid var(--divider);
+    }
+    .session-note {
+      color: var(--text-3);
+      font-size: 10px;
+    }
+    .stop {
+      min-width: 46px;
+      height: 23px;
+      padding: 0 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--fill-2);
+      color: var(--text-2);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .stop:hover { background: var(--fill-2-hover); color: var(--text); }
+    .stop:disabled { opacity: 0.45; cursor: default; }
+    .stop-all {
+      border-color: color-mix(in srgb, var(--danger) 24%, transparent);
+      color: var(--danger);
+    }
+    .detail-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .foot-note {
+      color: var(--text-3);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .empty {
+      padding: 16px 8px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--text-3);
+      font-size: 11px;
+      text-align: center;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #bar, .stop, #pin { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <button id="bar" type="button" aria-expanded="false" aria-controls="detail" title="查看缓存保活状态">
+      <span id="stateDot"></span>
+      <span id="barLabel">缓存保活</span>
+      <span id="barCount" class="num">--</span>
+      <span id="barCountdown" class="num">--:--</span>
+    </button>
+    <section id="detail" aria-label="缓存保活详情">
+      <div class="detail-head">
+        <span class="detail-title">缓存保活</span>
+        <span id="summary"></span>
+        <button id="pin" type="button" title="固定或自动收起详情">固定</button>
+      </div>
+      <div id="sessionList"></div>
+      <div class="detail-foot">
+        <span class="foot-note">独立 fork · 不写入主会话</span>
+        <button id="stopAll" class="stop stop-all" type="button">全部停止</button>
+      </div>
+    </section>
+  </div>
+  <script>
+    (function () {
+      const tauri = window.__TAURI__;
+      const invoke = tauri ? tauri.core.invoke : function () { return Promise.reject(new Error("Tauri 不可用")); };
+      const listen = tauri ? tauri.event.listen : function () { return Promise.resolve(function () {}); };
+      const PIN_KEY = "kimiCacheKeeperPin";
+      const root = document.getElementById("root");
+      const bar = document.getElementById("bar");
+      const stateDot = document.getElementById("stateDot");
+      const barCount = document.getElementById("barCount");
+      const barCountdown = document.getElementById("barCountdown");
+      const detail = document.getElementById("detail");
+      const summary = document.getElementById("summary");
+      const sessionList = document.getElementById("sessionList");
+      const pinBtn = document.getElementById("pin");
+      const stopAll = document.getElementById("stopAll");
+
+      let lastData = null;
+      let installed = false;
+      let open = false;
+      let pinned = localStorage.getItem(PIN_KEY) === "1";
+      let actionPending = false;
+      let closeTimer = 0;
+      let sizePending = false;
+      let lastHeight = 0;
+
+      function activeSessions() {
+        return lastData && Array.isArray(lastData.sessions)
+          ? lastData.sessions.filter(function (session) { return session && session.enabled; })
+          : [];
+      }
+
+      function setVisible(visible) {
+        invoke("cache_keeper_set_visible", { visible: visible }).catch(function () {});
+      }
+
+      function requestSize(force) {
+        if (sizePending) return;
+        sizePending = true;
+        requestAnimationFrame(function () {
+          sizePending = false;
+          detail.style.maxHeight = "";
+          const height = Math.ceil(root.getBoundingClientRect().height);
+          if (!force && height === lastHeight) return;
+          lastHeight = height;
+          invoke("cache_keeper_set_size", { width: 300, height: height }).catch(function () {});
+        });
+      }
+
+      function setOpen(value) {
+        open = !!(value && installed);
+        detail.style.display = open ? "block" : "none";
+        bar.setAttribute("aria-expanded", open ? "true" : "false");
+        if (!open) detail.style.maxHeight = "";
+        requestSize();
+      }
+
+      function applyPin() {
+        pinBtn.classList.toggle("active", pinned);
+        pinBtn.textContent = pinned ? "已固定" : "固定";
+        localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
+        if (pinned) setOpen(true);
+      }
+
+      function esc(value) {
+        return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char];
+        });
+      }
+
+      function fmtDuration(target) {
+        const numeric = Number(target);
+        const targetTime = isFinite(numeric) && numeric > 0 ? numeric : new Date(target).getTime();
+        const diff = Math.max(0, targetTime - Date.now());
+        if (!isFinite(diff)) return "--:--";
+        const seconds = Math.ceil(diff / 1000);
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const rest = seconds % 60;
+        if (hours > 0) return hours + ":" + String(minutes).padStart(2, "0") + ":" + String(rest).padStart(2, "0");
+        return String(minutes).padStart(2, "0") + ":" + String(rest).padStart(2, "0");
+      }
+
+      function fmtTime(value) {
+        if (!value) return "--:--";
+        const date = new Date(value);
+        if (!isFinite(date.getTime())) return "--:--";
+        return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+      }
+
+      function fmtHit(value) {
+        if (value == null || !isFinite(Number(value))) return "--";
+        const number = Number(value);
+        return ((number <= 1 ? number * 100 : number).toFixed(1)) + "%";
+      }
+
+      function nearestProbe(sessions) {
+        const times = sessions.map(function (session) { return session.nextProbeAt; })
+          .filter(function (value) { return value && isFinite(new Date(value).getTime()); })
+          .sort(function (a, b) { return new Date(a).getTime() - new Date(b).getTime(); });
+        return times[0] || null;
+      }
+
+      function renderCountdowns() {
+        const sessions = activeSessions();
+        const next = nearestProbe(sessions);
+        barCountdown.textContent = sessions.some(function (session) { return session.busy; })
+          ? "保活中" : next ? fmtDuration(next) : "--:--";
+        detail.querySelectorAll("[data-next]").forEach(function (element) {
+          element.textContent = element.dataset.next ? fmtDuration(element.dataset.next) : "等待中";
+        });
+      }
+
+      function sessionCard(session) {
+        const busy = !!session.busy;
+        const failed = !!session.error;
+        const stateClass = failed ? "error" : busy ? "busy" : "";
+        const stateText = failed ? "已暂停" : busy ? "正在保活" : "等待保活";
+        const isCurrent = lastData.currentSessionId && lastData.currentSessionId === session.sessionId;
+        const countdown = busy
+          ? '<span class="session-countdown num">进行中</span>'
+          : '<span class="session-countdown num" data-next="' + esc(session.nextProbeAt || "") + '">--:--</span>';
+        return '<article class="session">' +
+          '<div class="session-head">' +
+            '<span class="session-title" title="' + esc(session.title || session.sessionId) + '">' + esc(session.title || session.sessionId) + '</span>' +
+            (isCurrent ? '<span class="badge">当前</span>' : "") +
+          '</div>' +
+          '<div class="session-state">' +
+            '<span class="state-label ' + stateClass + '">' + stateText + '</span>' + countdown +
+          '</div>' +
+          '<div class="session-meta"><span>上次 ' + esc(fmtTime(session.lastProbeAt)) + '</span>' +
+            '<span class="num">命中 ' + esc(fmtHit(session.hitRatio)) + '</span></div>' +
+          (session.error ? '<div class="session-error" title="' + esc(session.error) + '">' + esc(session.error) + '</div>' : "") +
+          '<div class="session-actions"><span class="session-note">自动清理临时 fork</span>' +
+            '<button class="stop" type="button" data-session-id="' + esc(session.sessionId) + '"' + (actionPending ? " disabled" : "") + '>停止</button></div>' +
+        '</article>';
+      }
+
+      function render() {
+        installed = !!lastData && lastData.installed !== false;
+        if (!installed) {
+          setVisible(false);
+          return;
+        }
+        setVisible(true);
+        const sessions = activeSessions();
+        const hasError = sessions.some(function (session) { return !!session.error; });
+        const busy = sessions.some(function (session) { return !!session.busy; });
+        stateDot.className = sessions.length ? (hasError ? "error" : busy ? "busy" : "active") : "";
+        barCount.textContent = sessions.length ? sessions.length + " 会话" : "已关闭";
+        summary.textContent = sessions.length ? sessions.length + " 个会话运行中" : "当前未开启";
+        sessionList.innerHTML = sessions.length
+          ? sessions.map(sessionCard).join("")
+          : '<div class="empty">尚未开启缓存保活<br />可在 Kimi Code 中执行 /cache-keeper:on</div>';
+        stopAll.disabled = !sessions.length || actionPending;
+        renderCountdowns();
+        if (pinned) setOpen(true);
+        requestSize();
+      }
+
+      function tick() {
+        invoke("cache_keeper_status").then(function (data) {
+          lastData = data;
+          render();
+        }).catch(function () {
+          lastData = null;
+          render();
+        });
+      }
+
+      function runAction(command, args) {
+        if (actionPending) return;
+        actionPending = true;
+        render();
+        invoke(command, args || {}).catch(function () {}).then(function () {
+          actionPending = false;
+          tick();
+        });
+      }
+
+      bar.addEventListener("click", function () {
+        pinned = !pinned;
+        applyPin();
+        setOpen(pinned || !open);
+      });
+      pinBtn.addEventListener("click", function () {
+        pinned = !pinned;
+        applyPin();
+      });
+      root.addEventListener("mouseenter", function () {
+        clearTimeout(closeTimer);
+        if (installed) setOpen(true);
+      });
+      root.addEventListener("mouseleave", function () {
+        if (pinned) return;
+        clearTimeout(closeTimer);
+        closeTimer = setTimeout(function () { setOpen(false); }, 160);
+      });
+      sessionList.addEventListener("click", function (event) {
+        const button = event.target.closest("button[data-session-id]");
+        if (button) runAction("cache_keeper_off", { sessionId: button.dataset.sessionId });
+      });
+      stopAll.addEventListener("click", function () { runAction("cache_keeper_stop"); });
+      document.addEventListener("pointerup", function () {
+        setTimeout(function () { invoke("cache_keeper_focus_content").catch(function () {}); }, 0);
+      });
+
+      function applyTheme(payload) {
+        const theme = payload
+          ? (payload.dark === false ? "light" : "dark")
+          : (document.documentElement.dataset.theme || "dark");
+        const dark = theme !== "light";
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+        document.documentElement.style.setProperty("--page-bg", payload && payload.bg || (dark ? "#1a1a1e" : "#ffffff"));
+        document.documentElement.style.setProperty("--tabbar-bg", payload && payload.bg || (dark ? "#1a1a1e" : "#ffffff"));
+      }
+
+      applyTheme(null);
+      applyPin();
+      Promise.all([
+        listen("page-theme", function (event) { applyTheme(event.payload); }),
+        listen("cache-keeper-changed", tick),
+        listen("cache-keeper-geom", function () { requestSize(true); }),
+        listen("cache-keeper-applied", function (event) {
+          if (!open) return;
+          const height = event.payload && event.payload.height || 0;
+          detail.style.maxHeight = Math.max(40, height - 42) + "px";
+        })
+      ]).catch(function () {}).then(function () {
+        tick();
+        setInterval(tick, 5000);
+        setInterval(renderCountdowns, 1000);
+      });
+    })();
+  </script>
+</body>
+</html>

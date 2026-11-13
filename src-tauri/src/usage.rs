@@ -65,8 +65,20 @@ fn find_latest_session_dir(home: &Path) -> Option<PathBuf> {
     best.map(|(_, p)| p)
 }
 
+/// 单次响应的 tok/s：新格式在 step.end 里直接给出 output 与流式耗时，
+/// 口径与 kimi web 的请求调试行一致（output ÷ stream_ms，不足 50ms 视为无效）
+fn step_end_tps(ev: &serde_json::Value) -> Option<f64> {
+    let output = ev.get("usage")?.get("output")?.as_u64()?;
+    let stream_ms = ev.get("llmStreamDurationMs")?.as_i64()?;
+    if output == 0 || stream_ms < 50 {
+        return None;
+    }
+    Some(output as f64 / (stream_ms as f64 / 1000.0))
+}
+
 /// 从游标位置增量读取 wire.jsonl，只处理完整行（末尾半行留下轮），
-/// 聚合 usage.record 并把每条记录与前方的 llm.request 配对估算 TPS
+/// 聚合 usage.record 并取每次响应的 TPS：新格式用 step.end 自带的
+/// 流式耗时，旧格式回退到与前方的 llm.request 配对估算
 fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = match std::fs::File::open(path) {
@@ -88,13 +100,22 @@ fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
     }
     let complete = buf.iter().rposition(|&b| b == b'\n').map(|i| i + 1).unwrap_or(0);
     cur.offset += complete as u64;
-    for line in String::from_utf8_lossy(&buf[..complete]).lines() {
+    let text = String::from_utf8_lossy(&buf[..complete]);
+    // 同一次响应的 usage.record 与 step.end 会成对出现：本批出现 step.end 时
+    // 只按 step.end 取样，避免同一请求被两种口径各计一次
+    let has_step_end = text.contains("\"step.end\"");
+    if has_step_end {
+        cur.last_req_time = None;
+    }
+    for line in text.lines() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
         match v.get("type").and_then(|t| t.as_str()) {
             Some("llm.request") => {
-                cur.last_req_time = v.get("time").and_then(|t| t.as_i64());
+                if !has_step_end {
+                    cur.last_req_time = v.get("time").and_then(|t| t.as_i64());
+                }
             }
             Some("usage.record") => {
                 let Some(u) = v.get("usage") else { continue };
@@ -108,8 +129,11 @@ fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
                     continue;
                 };
                 agg.last_record_time = Some(agg.last_record_time.map_or(t, |x| x.max(t)));
-                // 配对前方的 llm.request：间隔即本次请求耗时（含排队/重试，
-                // 与 kimi web 内置组件口径一致的近似值）；异常间隔直接丢弃
+                // 旧格式没有 step.end，只能配对前方的 llm.request：
+                // 间隔即本次请求耗时（含排队/重试）；异常间隔直接丢弃
+                if has_step_end {
+                    continue;
+                }
                 if let Some(req_t) = cur.last_req_time.take() {
                     let dur_ms = t - req_t;
                     if (1..=300_000).contains(&dur_ms) {
@@ -119,6 +143,17 @@ fn consume_wire(cur: &mut WireCursor, agg: &mut SessionAgg, path: &Path) {
                             agg.recent_tps.pop_front();
                         }
                     }
+                }
+            }
+            Some("context.append_loop_event") if has_step_end => {
+                let Some(ev) = v.get("event") else { continue };
+                if ev.get("type").and_then(|t| t.as_str()) != Some("step.end") {
+                    continue;
+                }
+                let Some(tps) = step_end_tps(ev) else { continue };
+                agg.recent_tps.push_back(tps);
+                if agg.recent_tps.len() > 10 {
+                    agg.recent_tps.pop_front();
                 }
             }
             _ => {}
@@ -700,6 +735,75 @@ fn hourly_impl(app: &tauri::AppHandle) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tps_uses_step_end_stream_duration() {
+        let path = std::env::temp_dir().join(format!(
+            "tauri-kimi-tps-step-{}-{}.jsonl",
+            std::process::id(),
+            epoch_ms()
+        ));
+        let records = concat!(
+            r#"{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.begin","uuid":"a","turnId":"0","step":1},"time":1000}"#,
+            "\n",
+            r#"{"type":"usage.record","agentId":"main","usage":{"inputOther":10,"output":200,"inputCacheRead":5,"inputCacheCreation":0},"usageScope":"turn","time":2000}"#,
+            "\n",
+            r#"{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.end","uuid":"a","turnId":"0","step":1,"usage":{"inputOther":10,"output":200,"inputCacheRead":5,"inputCacheCreation":0},"llmFirstTokenLatencyMs":300,"llmStreamDurationMs":1000},"time":2001}"#,
+            "\n"
+        );
+        std::fs::write(&path, records).unwrap();
+        let mut cur = WireCursor::default();
+        let mut agg = SessionAgg::default();
+        consume_wire(&mut cur, &mut agg, &path);
+        std::fs::remove_file(path).unwrap();
+
+        // 用量仍以 usage.record 为准，TPS 只取一次 step.end（不与配对各计一次）
+        assert_eq!(agg.output, 200);
+        assert_eq!(agg.recent_tps.len(), 1);
+        assert!((agg.recent_tps[0] - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tps_falls_back_to_request_pairing() {
+        let path = std::env::temp_dir().join(format!(
+            "tauri-kimi-tps-pair-{}-{}.jsonl",
+            std::process::id(),
+            epoch_ms()
+        ));
+        let records = concat!(
+            r#"{"type":"llm.request","agentId":"main","time":1000}"#,
+            "\n",
+            r#"{"type":"usage.record","agentId":"main","usage":{"inputOther":10,"output":100,"inputCacheRead":0,"inputCacheCreation":0},"time":3000}"#,
+            "\n"
+        );
+        std::fs::write(&path, records).unwrap();
+        let mut cur = WireCursor::default();
+        let mut agg = SessionAgg::default();
+        consume_wire(&mut cur, &mut agg, &path);
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(agg.output, 100);
+        assert_eq!(agg.recent_tps.len(), 1);
+        assert!((agg.recent_tps[0] - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn step_end_tps_ignores_short_or_empty_streams() {
+        let ev = |output: u64, stream_ms: i64| {
+            serde_json::json!({
+                "usage": { "output": output },
+                "llmStreamDurationMs": stream_ms,
+            })
+        };
+        assert_eq!(step_end_tps(&ev(100, 49)), None);
+        assert_eq!(step_end_tps(&ev(0, 1000)), None);
+        assert_eq!(step_end_tps(&ev(100, 1000)), Some(100.0));
+        // 缺少耗时字段（中断的 step.end）不产生样本
+        assert_eq!(
+            step_end_tps(&serde_json::json!({ "usage": { "output": 100 } })),
+            None
+        );
+    }
 
     #[test]
     fn week_has_fourteen_ascending_days() {

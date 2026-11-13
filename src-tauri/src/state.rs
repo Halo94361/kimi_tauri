@@ -141,7 +141,8 @@ pub(crate) struct StatsState {
 #[derive(Default)]
 pub(crate) struct WireCursor {
     pub(crate) offset: u64,
-    /// 最近一条 llm.request 的时间戳，用于与紧随的 usage.record 配对估算 TPS
+    /// 最近一条 llm.request 的时间戳：旧格式无 step.end 时，
+    /// 用它和紧随的 usage.record 配对估算 TPS
     pub(crate) last_req_time: Option<i64>,
 }
 

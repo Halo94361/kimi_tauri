@@ -67,6 +67,8 @@ rustflags = ["-C", "link-arg=-L<仓库绝对路径>/src-tauri/link-libs"]
 
 CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。内网 Gitea 会读取同一份 `.github/workflows`，但本机 host runner 没有 `windows-latest` label，job 只会永久排队；因此该仓库在 Gitea 侧已关闭 Actions 单元（`has_actions=false`，改自仓库设置或 `PATCH /api/v1/repos/<owner>/<repo>`）。两个 job 仍带 `github.server_url == 'https://github.com'` 守卫：job 级 `if` 只有在 runner 认领后才求值，挡不住排队，只保证万一有人注册了 Windows runner 也不在 Gitea 上执行。Gitea 侧不跑 Rust 构建，原因是 Linux 交叉编译的 fat LTO 有 `Invalid bitcode signature` 偶发失败（实测约 1/3~1/2）。
 
+Gitea 的 Release 由本机定时任务从 GitHub 同步：`scripts/mirror_release_to_gitea.sh` 由 systemd user timer `kimi-tauri-release-mirror.timer` 每 15 分钟调用，读 GitHub 公开 release（`gh` 走本机代理），对 Gitea 上缺失的版本建 release 并上传 `tauri_kimi-windows-x64.zip`，tag 指向同一 commit。已存在的 release/附件跳过，下载失败不留空 release，可安全重跑。Gitea 访问令牌在 `~/.config/kimi-tauri-mirror/gitea-token`（600，名为 `release-mirror`，仅 `write:repository`），Gitea 侧直连 `127.0.0.1:3000` 并绕过代理。因为内网 Gitea 访问不需要代理，用户下载入口以 Gitea 为准。
+
 ## 开发约定
 
 - 按领域模块组织（模块地图见首段），最小修改，不引入多余抽象。

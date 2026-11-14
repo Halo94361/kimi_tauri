@@ -12,8 +12,10 @@ permissions:
 
 jobs:
   verify:
-    # master 分支推送只做编译、链接与单测验证
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # master 分支推送只做编译、链接与单测验证。
+    # 内网 Gitea 会读取同一份 .github/workflows，但它没有 windows-latest
+    # runner，job 会永久排队；用 server_url 守卫让 Gitea 直接跳过
+    if: github.server_url == 'https://github.com' && github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -58,8 +60,8 @@ jobs:
         run: cargo test --release
 
   build:
-    # 标签推送或手动 dispatch 才产出二进制
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # 标签推送或手动 dispatch 才产出二进制；同样只在 GitHub 上执行
+    if: github.server_url == 'https://github.com' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

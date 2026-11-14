@@ -1,0 +1,50 @@
+name: mirror-release
+
+# GitHub 构建完成后把产物搬到 Gitea：推 v* 标签后等 20 分钟（GitHub 的
+# Windows 构建实测约 8 分钟），再同步一次，不做周期性轮询。
+# 手动 dispatch 默认不等待，用于补同步或验证。
+#
+# 注意：Gitea 只读取第一个存在的 workflow 目录（.gitea/workflows 优先），
+# 因此本目录存在时 .github/workflows 完全不会被解析，不会产生排队任务。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      delay_seconds:
+        description: "同步前等待的秒数"
+        default: "0"
+
+jobs:
+  mirror:
+    runs-on: host
+    steps:
+      - name: checkout
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          git init -q .
+          git remote add origin "${{ github.server_url }}/${{ github.repository }}.git"
+          git -c http.extraheader="Authorization: token $TOKEN" fetch --depth 1 origin "${{ github.ref }}"
+          git checkout -q FETCH_HEAD
+
+      # 等 GitHub 那边的 release 出现；手动触发时用输入值（默认 0 秒）
+      - name: wait for GitHub build
+        run: |
+          set -eu
+          delay="${{ github.event.inputs.delay_seconds }}"
+          delay="${delay:-1200}"
+          echo "等待 ${delay}s 后同步"
+          sleep "$delay"
+
+      - name: sync to Gitea
+        env:
+          HTTPS_PROXY: http://127.0.0.1:7890
+          HTTP_PROXY: http://127.0.0.1:7890
+          NO_PROXY: localhost,127.0.0.1
+        run: |
+          set -eu
+          export PATH="$HOME/.local/bin:$PATH"
+          ./scripts/mirror_release_to_gitea.sh

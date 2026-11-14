@@ -65,9 +65,9 @@ CI 的 verify 与 build 两个 job 都会先编译它；Release 的 zip 内与 `
 rustflags = ["-C", "link-arg=-L<仓库绝对路径>/src-tauri/link-libs"]
 ```
 
-CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。内网 Gitea 会读取同一份 `.github/workflows`，但本机 host runner 没有 `windows-latest` label，job 只会永久排队；因此该仓库在 Gitea 侧已关闭 Actions 单元（`has_actions=false`，改自仓库设置或 `PATCH /api/v1/repos/<owner>/<repo>`）。两个 job 仍带 `github.server_url == 'https://github.com'` 守卫：job 级 `if` 只有在 runner 认领后才求值，挡不住排队，只保证万一有人注册了 Windows runner 也不在 Gitea 上执行。Gitea 侧不跑 Rust 构建，原因是 Linux 交叉编译的 fat LTO 有 `Invalid bitcode signature` 偶发失败（实测约 1/3~1/2）。
+CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。Gitea 侧的 Actions 开着，但只读 `.gitea/workflows`：Gitea 按 `WORKFLOW_DIRS` 顺序取**第一个存在的目录**（`.gitea/workflows` 优先），该目录存在时 `.github/workflows` 完全不被解析，因此 GitHub 那两个 `windows-latest` job 不会在 Gitea 出现。两个 job 仍带 `github.server_url == 'https://github.com'` 守卫，作为万一 `.gitea/workflows` 被删掉时的兜底（job 级 `if` 只在 runner 认领后求值，挡不住排队）。Gitea 侧不跑 Rust 构建，原因是 Linux 交叉编译的 fat LTO 有 `Invalid bitcode signature` 偶发失败（实测约 1/3~1/2）。
 
-Gitea 的 Release 由本机定时任务从 GitHub 同步：`scripts/mirror_release_to_gitea.sh` 由 systemd user timer `kimi-tauri-release-mirror.timer` 每 15 分钟调用，读 GitHub 公开 release（`gh` 走本机代理），对 Gitea 上缺失的版本建 release 并上传 `tauri_kimi-windows-x64.zip`，tag 指向同一 commit。已存在的 release/附件跳过，下载失败不留空 release，可安全重跑。Gitea 访问令牌在 `~/.config/kimi-tauri-mirror/gitea-token`（600，名为 `release-mirror`，仅 `write:repository`），Gitea 侧直连 `127.0.0.1:3000` 并绕过代理。因为内网 Gitea 访问不需要代理，用户下载入口以 Gitea 为准。
+Gitea 的 Release 由 `.gitea/workflows/mirror-release.yml` 触发：推 `v*` 标签后等 20 分钟（GitHub 的 Windows 构建约 8 分钟），在本机 host runner 上跑一次 `scripts/mirror_release_to_gitea.sh`，只同步一次、不做周期轮询；`workflow_dispatch` 的 `delay_seconds` 默认 0，用于补同步。脚本读 GitHub 公开 release（`gh` 走本机代理），对 Gitea 上缺失的版本建 release 并上传 `tauri_kimi-windows-x64.zip`，tag 指向同一 commit。已存在的 release/附件跳过，下载失败不留空 release，可安全重跑。Gitea 访问令牌在 `~/.config/kimi-tauri-mirror/gitea-token`（600，名为 `release-mirror`，仅 `write:repository`），Gitea 侧直连 `127.0.0.1:3000` 并绕过代理。原先的 systemd user timer（`kimi-tauri-release-mirror.timer`）已停用，unit 保留，脚本也可手动运行兜底。因为内网 Gitea 访问不需要代理，用户下载入口以 Gitea 为准。
 
 ## 开发约定
 

@@ -1,6 +1,6 @@
 //! 全局共享状态：AppState 与各领域的数据结构
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::AtomicU64;
@@ -157,6 +157,11 @@ pub(crate) struct SessionAgg {
     pub(crate) last_record_time: Option<i64>,
 }
 
+/// 单条 usage.record 的身份：事件时间戳 + usage 四元组。
+/// cache-keeper 保活的临时 fork 会话会把父会话 wire.jsonl 整段复制过去，
+/// 文件被重写时也会整份重读，跨文件聚合据此判断同一条用量是否已经计过
+pub(crate) type UsageKey = (i64, u64, u64, u64, u64);
+
 /// 今日用量聚合状态：cursors 记录各 wire.jsonl 的增量读取位置，
 /// date 为本地日期（yyyy-mm-dd），跨天时整体重置并重扫
 #[derive(Default)]
@@ -164,6 +169,8 @@ pub(crate) struct DailyStats {
     pub(crate) date: String,
     pub(crate) cursors: HashMap<PathBuf, u64>,
     pub(crate) agg: DailyAgg,
+    /// 已计入的事件身份，跨天重置时随之清空
+    pub(crate) seen: HashSet<UsageKey>,
 }
 
 #[derive(Default)]
@@ -179,6 +186,8 @@ pub(crate) struct DailyAgg {
 pub(crate) struct HourlyStats {
     pub(crate) cursors: HashMap<PathBuf, u64>,
     pub(crate) buckets: BTreeMap<i64, HourAgg>,
+    /// 已计入的事件身份，滚出窗口的桶对应的键随之清理
+    pub(crate) seen: HashSet<UsageKey>,
 }
 
 /// 单个整点的用量，主代理与子代理分开存，柱图按主/子堆叠

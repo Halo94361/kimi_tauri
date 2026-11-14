@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 use crate::state::{
-    AppState, DailyAgg, DailyStats, HourAgg, HourlyStats, SessionAgg, StatsState, WireCursor,
+    AppState, DailyAgg, DailyStats, HourAgg, HourlyStats, SessionAgg, StatsState, UsageKey,
+    WireCursor,
 };
 
 /// 内容页会话切换上报（SESSION_REPORTER_JS）
@@ -245,8 +246,16 @@ fn local_today() -> (String, i64) {
 
 /// 从游标位置增量读取 wire.jsonl，只聚合 time >= day_start 的 usage.record
 /// （按事件时间戳直接分桶到今日，避免跨天会话重复计算）；
-/// 末尾半行留下轮，文件被截断重建时从头解析
-fn consume_wire_today(offset: &mut u64, agg: &mut DailyAgg, path: &Path, day_start: i64) {
+/// 末尾半行留下轮，文件被截断重建时从头解析。跨文件按事件身份去重：
+/// cache-keeper 保活的临时 fork 会把父会话记录整段复制成新文件，
+/// 重复累加会让当日总量随保活次数膨胀
+fn consume_wire_today(
+    offset: &mut u64,
+    seen: &mut HashSet<UsageKey>,
+    agg: &mut DailyAgg,
+    path: &Path,
+    day_start: i64,
+) {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = match std::fs::File::open(path) {
         Ok(f) => f,
@@ -280,10 +289,17 @@ fn consume_wire_today(offset: &mut u64, agg: &mut DailyAgg, path: &Path, day_sta
         }
         let Some(u) = v.get("usage") else { continue };
         let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-        agg.input_other += get("inputOther");
-        agg.output += get("output");
-        agg.cache_read += get("inputCacheRead");
-        agg.cache_creation += get("inputCacheCreation");
+        let input_other = get("inputOther");
+        let output = get("output");
+        let cache_read = get("inputCacheRead");
+        let cache_creation = get("inputCacheCreation");
+        if !seen.insert((t, input_other, output, cache_read, cache_creation)) {
+            continue;
+        }
+        agg.input_other += input_other;
+        agg.output += output;
+        agg.cache_read += cache_read;
+        agg.cache_creation += cache_creation;
     }
 }
 
@@ -314,8 +330,10 @@ pub(crate) async fn daily_stats(
 
     let mut active_today = false;
     if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
-        // 拆分字段借用，避免 cursors 与 agg 同时可变借用 st
-        let DailyStats { cursors, agg, .. } = &mut *st;
+        // 拆分字段借用，避免 cursors / seen 与 agg 同时可变借用 st
+        let DailyStats {
+            cursors, agg, seen, ..
+        } = &mut *st;
         for wd in workdirs.flatten() {
             let Ok(sessions) = std::fs::read_dir(wd.path()) else {
                 continue;
@@ -342,7 +360,7 @@ pub(crate) async fn daily_stats(
                     }
                     active_today = true;
                     let offset = cursors.entry(wire.clone()).or_insert(0);
-                    consume_wire_today(offset, agg, &wire, day_start);
+                    consume_wire_today(offset, seen, agg, &wire, day_start);
                 }
             }
         }
@@ -402,8 +420,14 @@ fn bucket_index(days: &[(String, i64)], t: i64) -> Option<usize> {
 type ModelAggs = std::collections::BTreeMap<String, DailyAgg>;
 
 /// 全量读取一个 wire.jsonl，把窗口内的 usage.record 按日期与模型聚合；
-/// 返回是否命中过记录（文件名再新也不保证窗口内真有事件）
-fn consume_wire_week(days: &[(String, i64)], aggs: &mut [ModelAggs], path: &Path) -> bool {
+/// 返回是否命中过记录（文件名再新也不保证窗口内真有事件）。
+/// seen 与日/小时聚合共用同一套事件身份，fork 复制来的记录只算一次
+fn consume_wire_week(
+    days: &[(String, i64)],
+    seen: &mut HashSet<UsageKey>,
+    aggs: &mut [ModelAggs],
+    path: &Path,
+) -> bool {
     use std::io::Read;
     let mut buf = Vec::new();
     if std::fs::File::open(path)
@@ -428,16 +452,23 @@ fn consume_wire_week(days: &[(String, i64)], aggs: &mut [ModelAggs], path: &Path
         };
         let Some(u) = v.get("usage") else { continue };
         let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let input_other = get("inputOther");
+        let output = get("output");
+        let cache_read = get("inputCacheRead");
+        let cache_creation = get("inputCacheCreation");
+        if !seen.insert((t, input_other, output, cache_read, cache_creation)) {
+            continue;
+        }
         let model = v
             .get("model")
             .and_then(|m| m.as_str())
             .filter(|m| !m.is_empty())
             .unwrap_or("未知模型");
         let agg = aggs[i].entry(model.to_string()).or_default();
-        agg.input_other += get("inputOther");
-        agg.output += get("output");
-        agg.cache_read += get("inputCacheRead");
-        agg.cache_creation += get("inputCacheCreation");
+        agg.input_other += input_other;
+        agg.output += output;
+        agg.cache_read += cache_read;
+        agg.cache_creation += cache_creation;
         found = true;
     }
     found
@@ -454,6 +485,7 @@ pub(crate) async fn weekly_stats(
     let days = last_fourteen_days();
     let window_start = days.first().map(|d| d.1).unwrap_or(0);
     let mut aggs: Vec<ModelAggs> = (0..days.len()).map(|_| ModelAggs::new()).collect();
+    let mut seen = HashSet::new();
     let mut found = false;
     if let Some(home) = kimi_code_home() {
         if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
@@ -480,7 +512,7 @@ pub(crate) async fn weekly_stats(
                         if mtime_ms < window_start {
                             continue;
                         }
-                        if consume_wire_week(&days, &mut aggs, &wire) {
+                        if consume_wire_week(&days, &mut seen, &mut aggs, &wire) {
                             found = true;
                         }
                     }
@@ -567,10 +599,11 @@ fn hour_total(h: &HourAgg) -> u64 {
 }
 
 /// 从游标位置增量读取 wire.jsonl，把窗口内的 usage.record 分到本地整点桶；
-/// 主代理与子代理分开累计，柱图据此堆叠
+/// 主代理与子代理分开累计，柱图据此堆叠；seen 与日聚合共用同一套事件身份
 fn consume_wire_hourly(
     offset: &mut u64,
     buckets: &mut std::collections::BTreeMap<i64, HourAgg>,
+    seen: &mut HashSet<UsageKey>,
     path: &Path,
     window_start: i64,
     current_hour: i64,
@@ -611,6 +644,13 @@ fn consume_wire_hourly(
         }
         let Some(u) = v.get("usage") else { continue };
         let get = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let input_other = get("inputOther");
+        let output = get("output");
+        let cache_read = get("inputCacheRead");
+        let cache_creation = get("inputCacheCreation");
+        if !seen.insert((t, input_other, output, cache_read, cache_creation)) {
+            continue;
+        }
         let bucket = floor_hour(t, local_offset).min(current_hour);
         let entry = buckets.entry(bucket).or_default();
         let agg = if is_main {
@@ -618,10 +658,10 @@ fn consume_wire_hourly(
         } else {
             &mut entry.sub
         };
-        agg.input_other += get("inputOther");
-        agg.output += get("output");
-        agg.cache_read += get("inputCacheRead");
-        agg.cache_creation += get("inputCacheCreation");
+        agg.input_other += input_other;
+        agg.output += output;
+        agg.cache_read += cache_read;
+        agg.cache_creation += cache_creation;
         found = true;
     }
     found
@@ -654,8 +694,14 @@ fn hourly_impl(app: &tauri::AppHandle) -> serde_json::Value {
     let mut st = state.hourly.lock().unwrap();
     st.buckets
         .retain(|t, _| (*t >= window_start) && (*t <= current_hour));
-    let HourlyStats { cursors, buckets } = &mut *st;
-    let mut seen = HashSet::new();
+    st.seen.retain(|k| k.0 >= window_start);
+    let HourlyStats {
+        cursors,
+        buckets,
+        seen,
+    } = &mut *st;
+    // 本窗口内仍存在的文件：滚出窗口的游标随之丢弃
+    let mut alive = HashSet::new();
 
     if let Ok(workdirs) = std::fs::read_dir(home.join("sessions")) {
         for wd in workdirs.flatten() {
@@ -683,11 +729,12 @@ fn hourly_impl(app: &tauri::AppHandle) -> serde_json::Value {
                         continue;
                     }
                     let is_main = agent.file_name().to_string_lossy() == "main";
-                    seen.insert(wire.clone());
+                    alive.insert(wire.clone());
                     let cursor = cursors.entry(wire.clone()).or_insert(0);
                     consume_wire_hourly(
                         cursor,
                         buckets,
+                        seen,
                         &wire,
                         window_start,
                         current_hour,
@@ -698,7 +745,7 @@ fn hourly_impl(app: &tauri::AppHandle) -> serde_json::Value {
             }
         }
     }
-    cursors.retain(|p, _| seen.contains(p));
+    cursors.retain(|p, _| alive.contains(p));
 
     let mut hours = Vec::with_capacity(24);
     let mut input_total = 0u64;
@@ -805,6 +852,40 @@ mod tests {
         );
     }
 
+    /// cache-keeper 保活 fork 的 wire 会整段复制父会话记录，
+    /// 同一事件不能因为出现在两个文件里被算两次
+    #[test]
+    fn fork_replayed_usage_counts_once() {
+        let stamp = format!("{}-{}", std::process::id(), epoch_ms());
+        let parent = std::env::temp_dir().join(format!("tauri-kimi-fork-parent-{stamp}.jsonl"));
+        let fork = std::env::temp_dir().join(format!("tauri-kimi-fork-child-{stamp}.jsonl"));
+        let line = |t: i64, other: u64, out: u64, read: u64| {
+            format!(
+                r#"{{"type":"usage.record","model":"m","time":{t},"usage":{{"inputOther":{other},"output":{out},"inputCacheRead":{read},"inputCacheCreation":0}}}}"#
+            )
+        };
+        let inherited = [line(1000, 10, 2, 100), line(2000, 20, 3, 200)];
+        let own = line(3000, 5, 1, 50);
+        std::fs::write(&parent, format!("{}\n", inherited.join("\n"))).unwrap();
+        // fork：父会话记录 + 自己的一条
+        std::fs::write(&fork, format!("{}\n{}\n", inherited.join("\n"), own)).unwrap();
+
+        let mut seen = HashSet::new();
+        let mut agg = DailyAgg::default();
+        let mut parent_offset = 0;
+        let mut fork_offset = 0;
+        consume_wire_today(&mut parent_offset, &mut seen, &mut agg, &parent, 0);
+        consume_wire_today(&mut fork_offset, &mut seen, &mut agg, &fork, 0);
+        // 文件被重写后从头重读，同一批事件也不再重复累加
+        consume_wire_today(&mut parent_offset, &mut seen, &mut agg, &parent, 0);
+        std::fs::remove_file(parent).unwrap();
+        std::fs::remove_file(fork).unwrap();
+
+        assert_eq!(agg.input_other, 35);
+        assert_eq!(agg.output, 6);
+        assert_eq!(agg.cache_read, 350);
+    }
+
     #[test]
     fn week_has_fourteen_ascending_days() {
         let days = last_fourteen_days();
@@ -833,7 +914,8 @@ mod tests {
         std::fs::write(&path, records).unwrap();
         let days = vec![("d0".to_string(), 0), ("d1".to_string(), 1000)];
         let mut aggs = vec![ModelAggs::new(), ModelAggs::new()];
-        assert!(consume_wire_week(&days, &mut aggs, &path));
+        let mut seen = HashSet::new();
+        assert!(consume_wire_week(&days, &mut seen, &mut aggs, &path));
         std::fs::remove_file(path).unwrap();
 
         assert_eq!(aggs[0].len(), 2);

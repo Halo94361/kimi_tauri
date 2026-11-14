@@ -65,7 +65,7 @@ CI 的 verify 与 build 两个 job 都会先编译它；Release 的 zip 内与 `
 rustflags = ["-C", "link-arg=-L<仓库绝对路径>/src-tauri/link-libs"]
 ```
 
-CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。两个 job 都带 `github.server_url == 'https://github.com'` 守卫：内网 Gitea 会读取同一份 `.github/workflows`，但它的 host runner 没有 `windows-latest` label，不加守卫会让 job 在 Gitea 里永久排队；Gitea 侧不跑 Rust 构建（Linux 交叉编译的 fat LTO 有 `Invalid bitcode signature` 偶发失败，实测约 1/3~1/2）。
+CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。内网 Gitea 会读取同一份 `.github/workflows`，但本机 host runner 没有 `windows-latest` label，job 只会永久排队；因此该仓库在 Gitea 侧已关闭 Actions 单元（`has_actions=false`，改自仓库设置或 `PATCH /api/v1/repos/<owner>/<repo>`）。两个 job 仍带 `github.server_url == 'https://github.com'` 守卫：job 级 `if` 只有在 runner 认领后才求值，挡不住排队，只保证万一有人注册了 Windows runner 也不在 Gitea 上执行。Gitea 侧不跑 Rust 构建，原因是 Linux 交叉编译的 fat LTO 有 `Invalid bitcode signature` 偶发失败（实测约 1/3~1/2）。
 
 ## 开发约定
 

@@ -67,8 +67,6 @@ rustflags = ["-C", "link-arg=-L<仓库绝对路径>/src-tauri/link-libs"]
 
 CI 行为：推 `master` 只跑 `cargo check --all-targets` 与 `cargo test --release`（含链接与单测；debug 版 cdylib 会超过 MinGW 导出序数上限，必须用 release）；推 `v*` 标签或手动 dispatch 才编译并打包。
 
-内网镜像的 Gitea 侧自动发布在 `.gitea/workflows/release.yml`。其 runner 是 host 模式（label `host`），没有 GitHub Actions 市场，所以工作流不写 `uses:`，checkout 与发 Release 都用 git/curl 调 Gitea API；runner 跑在 Linux 上，用 `cargo build --release --target x86_64-pc-windows-gnu` 交叉编译（宿主 mingw-w64 自带 `libgcc_eh.a`，不需要 `link-libs` 覆盖；也因此不能跑 `cargo test`，链接烟测只由 GitHub 的 Windows runner 承担）。推 `v*` 标签会同时触发两处发布，Gitea 侧手动 dispatch 只编译打包、不建 Release。
-
 ## 开发约定
 
 - 按领域模块组织（模块地图见首段），最小修改，不引入多余抽象。

@@ -1,6 +1,6 @@
 [package]
 name = "tauri_kimi"
-version = "0.7.9"
+version = "0.7.10"
 edition = "2021"
 
 [lib]
@@ -43,5 +43,7 @@ windows-sys = { version = "0.59", features = [
 
 [profile.release]
 panic = "abort"
-lto = true
-codegen-units = 1
+# 壳是 IO/UI 进程，不需要峰值性能：fat LTO + cgu=1 时改一个模块出 exe 要 118s，
+# thin + 16 降到 39s（本机实测），代价是 exe 11.2MB → 18.5MB。
+lto = "thin"
+codegen-units = 16

@@ -67,7 +67,15 @@ pub(crate) const REFRESH_BRIDGE_JS: &str = r#"window.addEventListener("keydown",
         log: (level, message, args) => { console[level === "error" ? "error" : "info"](message, ...(args || [])) },
         setTheme: () => { if (window.__kimiThemeSample) window.__kimiThemeSample() },
         onUpdateStatus: () => () => {},
-        getUpdateStatus: () => Promise.resolve({ state: "idle" })
+        getUpdateStatus: () => Promise.resolve({ state: "idle" }),
+        // kimi web 2.7.0 起在 boot 期无条件调用以下宿主契约，前端不做
+        // 存在性检查，缺失会让整棵组件树挂掉（页面白屏）：
+        // 全屏与退出确认由窗口系统（关窗行为 / 托盘菜单）承载，壳没有
+        // 对应入口，因此 isFullscreen 恒 false，订阅方法返回空退订函数
+        isFullscreen: () => Promise.resolve(false),
+        onFullscreenChanged: () => () => {},
+        onQuitConfirm: () => () => {},
+        onQuitConfirmCancel: () => () => {}
     };
 })();"#;
 

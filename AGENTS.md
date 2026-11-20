@@ -27,7 +27,7 @@
 
 ## 关键契约
 
-- **桌面桥 `window.kimiDesktop`**：kimi web 前端会无存在性检查地调用 `onUpdateStatus` / `getUpdateStatus` / `setTheme`，缺失会让设置面板抛 `TypeError`。注入脚本必须提供最小实现：`getUpdateStatus` 返回 `{state:"idle"}`、`onUpdateStatus` 返回退订函数、`setTheme` 触发即时主题采样、`log` 转 console。kimi CLI 升级后设置面板报“出错了”，先查这里。
+- **桌面桥 `window.kimiDesktop`**：kimi web 前端按存在性分流——只要注入脚本定义了该对象就判定为桌面宿主，随后在 Vue `setup` 阶段**无存在性检查**地直调一批宿主方法，缺任何一个都会抛 `TypeError` 打断整棵组件树，页面全白。当前必填：`getUpdateStatus`（返回 `{state:"idle"}`）、`onUpdateStatus`、`onFullscreenChanged`、`onQuitConfirm`、`onQuitConfirmCancel`（三者返回退订函数）、`isFullscreen`（返回 `Promise<boolean>`，壳无全屏入口故恒 `false`）、`setTheme`（触发即时主题采样）、`log`（转 console）。其余宿主能力（浏览器面板 `browser*`、原生终端、截屏等）前端用 `typeof` 或可选链探测，补空实现会让前端渲染出无宿主支撑的 UI（如浏览器面板报错），不要补。`showOpenDialog` 是唯一无保护直调但不在启动路径上的方法（选目录处有 try/catch，选 SSH 身份文件处没有）：壳未接系统对话框时只表现为该功能不可用，不影响启动。kimi CLI 升级后页面全白或设置面板报“出错了”，先查这里并复核新版本 bundle 里的直调清单。
 - **通知**：窗口构建时用 `on_permission_request` 按设置 `notifications` 放行 `PermissionKind::Notifications`（需 tauri ≥ 2.12），关闭时返回 Deny；点击 toast 经 `show_window` 命令唤回窗口。
 - **ACL**：`build.rs` 的 `AppManifest.commands` 为自定义命令生成 `allow-*` 权限；应用源页面（`tabbar` / `local` 内建页 / `stats` / `settings` / `cache-keeper`）声明在 `capabilities/default.json`，remote 源在 `capabilities/kimi-remote.json`（按 `remote.urls` 放行 `allow-show-window` / `allow-report-theme` / `allow-report-session`）；远程控制提示条位于 tabbar，两条命令（`allow-remote-status` / `allow-retry-remote`）声明在 `default.json`。`stats.html` 需要 `allow-session-stats` / `allow-daily-stats` / `allow-hourly-stats` / `allow-quota-stats` 与全部 `allow-stats-*`；内容页的会话上报脚本需要 `allow-report-session`。设置页与选项卡栏用到的 `allow-get-settings` / `allow-sync-tab` 等命令同样只在 `default.json`，remote 源不授权。新增命令要同步这两处。
 - **敏感信息**：Bearer token 只存内存与 URL fragment，禁止写入日志或持久化。
